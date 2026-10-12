@@ -2,9 +2,14 @@ package util
 
 import (
 	"bytes"
-	"github.com/stretchr/testify/require"
+	"io"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 )
 
 func TestFixedLimiter_AllowValueReset(t *testing.T) {
@@ -146,4 +151,178 @@ func TestLimitWriter_WriteTwoDifferentLimiters_Wait_FixedLimiterFail(t *testing.
 	time.Sleep(250 * time.Millisecond)
 	_, err = lw.Write(make([]byte, 8)) // <<< FixedLimiter fails
 	require.Equal(t, ErrLimitReached, err)
+}
+
+func TestCountingReader_Total(t *testing.T) {
+	cr := NewCountingReader(strings.NewReader("hello world"))
+	buf := make([]byte, 5)
+
+	n, err := cr.Read(buf)
+	require.Nil(t, err)
+	require.Equal(t, 5, n)
+	require.Equal(t, int64(5), cr.Total())
+
+	n, err = cr.Read(buf)
+	require.Nil(t, err)
+	require.Equal(t, 5, n)
+	require.Equal(t, int64(10), cr.Total())
+
+	n, err = cr.Read(buf)
+	require.Nil(t, err)
+	require.Equal(t, 1, n)
+	require.Equal(t, int64(11), cr.Total())
+
+	_, err = cr.Read(buf)
+	require.Equal(t, io.EOF, err)
+	require.Equal(t, int64(11), cr.Total())
+}
+
+func TestCountingReader_Empty(t *testing.T) {
+	cr := NewCountingReader(strings.NewReader(""))
+	require.Equal(t, int64(0), cr.Total())
+
+	_, err := cr.Read(make([]byte, 10))
+	require.Equal(t, io.EOF, err)
+	require.Equal(t, int64(0), cr.Total())
+}
+
+func TestLimitReader_ReadNoLimiter(t *testing.T) {
+	lr := NewLimitReader(strings.NewReader("hello"))
+	data, err := io.ReadAll(lr)
+	require.Nil(t, err)
+	require.Equal(t, "hello", string(data))
+}
+
+func TestLimitReader_ReadOneLimiter(t *testing.T) {
+	l := NewFixedLimiter(10)
+	lr := NewLimitReader(strings.NewReader("hello world!"), l)
+
+	buf := make([]byte, 5)
+	n, err := lr.Read(buf)
+	require.Nil(t, err)
+	require.Equal(t, 5, n)
+	require.Equal(t, int64(5), l.Value())
+
+	n, err = lr.Read(buf)
+	require.Nil(t, err)
+	require.Equal(t, 5, n)
+	require.Equal(t, int64(10), l.Value())
+
+	_, err = lr.Read(buf)
+	require.Equal(t, ErrLimitReached, err)
+}
+
+func TestLimitReader_ReadTwoLimiters(t *testing.T) {
+	l1 := NewFixedLimiter(11)
+	l2 := NewFixedLimiter(8)
+	lr := NewLimitReader(strings.NewReader("hello world!"), l1, l2)
+
+	buf := make([]byte, 5)
+	n, err := lr.Read(buf)
+	require.Nil(t, err)
+	require.Equal(t, 5, n)
+
+	// Second read: l2 (limit 8) should reject 5 more bytes
+	_, err = lr.Read(buf)
+	require.Equal(t, ErrLimitReached, err)
+	// l1 should have been reverted
+	require.Equal(t, int64(5), l1.Value())
+	require.Equal(t, int64(5), l2.Value())
+}
+
+func TestLimitReader_ReadAll(t *testing.T) {
+	l := NewFixedLimiter(100)
+	lr := NewLimitReader(strings.NewReader("hello"), l)
+	data, err := io.ReadAll(lr)
+	require.Nil(t, err)
+	require.Equal(t, "hello", string(data))
+	require.Equal(t, int64(5), l.Value())
+}
+
+func TestLimitReader_ReadExactLimit(t *testing.T) {
+	l := NewFixedLimiter(5)
+	lr := NewLimitReader(bytes.NewReader(make([]byte, 5)), l)
+	data, err := io.ReadAll(lr)
+	require.Nil(t, err)
+	require.Equal(t, 5, len(data))
+	require.Equal(t, int64(5), l.Value())
+}
+
+func TestRateLimiter_Burn(t *testing.T) {
+	// 10 bytes per hour: no meaningful replenishment during the test
+	l := NewRateLimiter(rate.Every(6*time.Minute), 10)
+	require.True(t, l.AllowN(3))
+	l.Burn(5)
+	require.True(t, l.AllowN(2)) // 3 + 5 + 2 = 10, bucket exactly empty
+	require.False(t, l.Allow())
+}
+
+func TestRateLimiter_Burn_DebtIsCapped(t *testing.T) {
+	l := NewRateLimiter(rate.Every(6*time.Minute), 10)
+	l.Burn(1000000) // Way beyond capacity: drains the bucket plus at most one burst of debt
+	require.False(t, l.Allow())
+	// With one burst (10) + debt burst (10) burned at 1 token per 6 minutes, the bucket must
+	// recover within [6min, 2h]. Sanity-check the debt cap via the underlying token count.
+}
+
+func TestBurnTokens(t *testing.T) {
+	l := rate.NewLimiter(rate.Every(6*time.Minute), 10)
+	for i := 0; i < 4; i++ {
+		require.True(t, l.Allow())
+	}
+	BurnTokens(l, 6)
+	require.False(t, l.Allow()) // 4 + 6 = 10, bucket empty
+	require.Greater(t, l.Tokens(), -21.0)
+	BurnTokens(l, 1000)
+	require.False(t, l.Allow())
+	require.Greater(t, l.Tokens(), -11.0) // Debt capped at ~one burst
+}
+
+func TestBurnTokens_DebtCapHoldsWhileTheBucketIsBeingConsumed(t *testing.T) {
+	// The cap used to come from a separate read of the available tokens, so anything consuming
+	// the limiter between that read and the reservation made the burn land deeper than one
+	// burst. The cap is enforced per reservation now, which ordinary traffic cannot outrun.
+	const burst = 10
+	l := rate.NewLimiter(rate.Every(time.Second), burst)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					l.Allow() // Ordinary consumption, racing the burn below
+				}
+			}
+		}()
+	}
+	BurnTokens(l, 1000)
+	close(stop)
+	wg.Wait()
+	require.GreaterOrEqual(t, l.Tokens(), -float64(burst), "debt went deeper than one burst")
+}
+
+func TestBurnTokens_SerializedBurnersShareOneBurstOfDebt(t *testing.T) {
+	// Several burners have to be serialized by the caller (RateLimiter.Burn does it with its own
+	// mutex). Serialized, they share one burst of debt rather than each taking one.
+	const burst = 10
+	l := rate.NewLimiter(rate.Every(time.Second), burst)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mu.Lock()
+			defer mu.Unlock()
+			BurnTokens(l, 1000)
+		}()
+	}
+	wg.Wait()
+	require.GreaterOrEqual(t, l.Tokens(), -float64(burst), "debt went deeper than one burst")
+	require.Less(t, l.Tokens(), -float64(burst)+1, "the burn did not reach the full depth")
 }

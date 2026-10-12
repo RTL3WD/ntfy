@@ -18,8 +18,8 @@ get a list of [command line options](#command-line-options).
 
 ## Example config
 !!! info
-    Definitely check out the **[server.yml](https://github.com/binwiederhier/ntfy/blob/main/server/server.yml)** file.
-    It contains examples and detailed descriptions of all the settings.
+    Definitely check out the **[server.yml](https://github.com/binwiederhier/ntfy/blob/main/server/server.yml)** file. It contains examples and detailed descriptions of all the settings.
+    You may also want to look at how ntfy.sh is configured in the [ntfy-ansible](https://github.com/binwiederhier/ntfy-ansible) repository.
 
 The most basic settings are `base-url` (the external URL of the ntfy server), the HTTP/HTTPS listen address (`listen-http`
 and `listen-https`), and socket path (`listen-unix`). All the other things are additional features.
@@ -50,6 +50,17 @@ Here are a few working sample configs using a `/etc/ntfy/server.yml` file:
     listen-http: ":2586"
     cache-file: "/var/cache/ntfy/cache.db"
     attachment-cache-dir: "/var/cache/ntfy/attachments"
+    behind-proxy: true
+    ```
+
+=== "server.yml (PostgreSQL, behind proxy)"
+    ``` yaml
+    base-url: "https://ntfy.example.com"
+    listen-http: ":2586"
+    database-url: "postgres://ntfy:mypassword@db.example.com:5432/ntfy?sslmode=require"
+    attachment-cache-dir: "/var/cache/ntfy/attachments"
+    behind-proxy: true
+    auth-default-access: "deny-all"
     ```
 
 === "server.yml (ntfy.sh config)"
@@ -78,7 +89,6 @@ using Docker Compose (i.e. `docker-compose.yml`):
 
 === "Docker Compose (w/ auth, cache, attachments)"
     ``` yaml
-	version: '3'
 	services:
 	  ntfy:
 	    image: binwiederhier/ntfy
@@ -88,6 +98,7 @@ using Docker Compose (i.e. `docker-compose.yml`):
 	      NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
 	      NTFY_AUTH_FILE: /var/lib/ntfy/auth.db
 	      NTFY_AUTH_DEFAULT_ACCESS: deny-all
+	      NTFY_AUTH_USERS: 'phil:$$2a$$10$$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:admin' # Must escape '$' as '$$'
 	      NTFY_BEHIND_PROXY: true
 	      NTFY_ATTACHMENT_CACHE_DIR: /var/lib/ntfy/attachments
 	      NTFY_ENABLE_LOGIN: true
@@ -100,7 +111,6 @@ using Docker Compose (i.e. `docker-compose.yml`):
 
 === "Docker Compose (w/ auth, cache, web push, iOS)"
     ``` yaml
-	version: '3'
 	services:
 	  ntfy:
 	    image: binwiederhier/ntfy
@@ -125,16 +135,371 @@ using Docker Compose (i.e. `docker-compose.yml`):
 	    command: serve
     ```
 
+## Config generator
+
+This generator helps you configure your self-hosted ntfy instance. It's not fully featured, but it is a good starting point. Please refer to the relevant sections in the doc for more details.
+
+<div style="text-align: center;">
+<button type="button" id="cg-open-btn" class="cg-open-btn">Open config generator</button>
+</div>
+
+<figure markdown style="padding-left: 50px; padding-right: 50px; cursor: pointer;" onclick="document.getElementById('cg-open-btn').click();">
+  <img src="../../static/img/config-generator.png"/>
+  <figcaption>The config generator helps you create a custom config for your self-hosted ntfy instance. Click to open.</figcaption>
+</figure>
+
+<div id="cg-modal" class="cg-modal" style="display:none">
+<div class="cg-modal-backdrop"></div>
+<div class="cg-modal-dialog">
+<div class="cg-modal-header">
+<div class="cg-modal-header-left">
+<span class="cg-modal-title">Config generator</span><span class="cg-badge-beta">BETA</span>
+<span class="cg-modal-desc">This generator helps you configure your self-hosted ntfy instance. It's not fully featured, but it is a good starting point.</span>
+</div>
+<div class="cg-modal-header-actions">
+<button type="button" id="cg-reset-btn" class="cg-modal-reset" title="Reset all values">Reset</button>
+<button type="button" id="cg-close-btn" class="cg-modal-close" title="Close">&times;</button>
+</div>
+</div>
+<div class="cg-modal-body">
+<div class="cg-mobile-toggle">
+  <button class="cg-mobile-toggle-btn active" data-show="left">Edit</button>
+  <button class="cg-mobile-toggle-btn" data-show="right">Preview</button>
+</div>
+<div id="cg-left">
+<div class="cg-nav">
+<div class="cg-nav-tab active" data-panel="cg-panel-general">General</div>
+<div class="cg-nav-tab cg-hidden" data-panel="cg-panel-database" id="cg-nav-database">Database</div>
+<div class="cg-nav-tab cg-hidden" data-panel="cg-panel-auth" id="cg-nav-auth">Users</div>
+<div class="cg-nav-tab cg-hidden" data-panel="cg-panel-cache" id="cg-nav-cache">Message Cache</div>
+<div class="cg-nav-tab cg-hidden" data-panel="cg-panel-attach" id="cg-nav-attach">Attachments</div>
+<div class="cg-nav-tab cg-hidden" data-panel="cg-panel-webpush" id="cg-nav-webpush">Web Push</div>
+<div class="cg-nav-tab cg-hidden" data-panel="cg-panel-email" id="cg-nav-email">Email</div>
+</div>
+<div class="cg-panels">
+<div class="cg-panel active" id="cg-panel-general">
+<div class="cg-field cg-inline-field">
+<label>What URL will ntfy be reachable on?</label>
+<input type="text" data-key="base-url" placeholder="https://ntfy.example.com">
+</div>
+<div class="cg-field cg-inline-field">
+<label>Will ntfy run behind a proxy (e.g. nginx, Caddy)? <a href="/config/#behind-a-proxy-tls-etc" target="_blank" class="cg-help"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.496 6.033h.825c.138 0 .248-.113.266-.25.09-.656.54-1.134 1.342-1.134.686 0 1.314.343 1.314 1.168 0 .635-.374.927-.965 1.371-.673.489-1.206 1.06-1.168 1.987l.003.217a.25.25 0 0 0 .25.246h.811a.25.25 0 0 0 .25-.25v-.105c0-.718.273-.927 1.01-1.486.609-.463 1.244-.977 1.244-2.056 0-1.511-1.276-2.241-2.673-2.241-1.267 0-2.655.59-2.75 2.286a.237.237 0 0 0 .241.247m2.325 6.443c.61 0 1.029-.394 1.029-.927 0-.552-.42-.94-1.029-.94-.584 0-1.009.388-1.009.94 0 .533.425.927 1.01.927z"/></svg></a></label>
+<div class="cg-btn-group">
+<label><input type="radio" name="cg-proxy" value="no" checked><span>No</span></label>
+<label><input type="radio" name="cg-proxy" value="yes"><span>Yes</span></label>
+</div>
+</div>
+<div class="cg-field cg-inline-field">
+<label>Will this ntfy server be open or private? <a href="/config/#access-control" target="_blank" class="cg-help"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.496 6.033h.825c.138 0 .248-.113.266-.25.09-.656.54-1.134 1.342-1.134.686 0 1.314.343 1.314 1.168 0 .635-.374.927-.965 1.371-.673.489-1.206 1.06-1.168 1.987l.003.217a.25.25 0 0 0 .25.246h.811a.25.25 0 0 0 .25-.25v-.105c0-.718.273-.927 1.01-1.486.609-.463 1.244-.977 1.244-2.056 0-1.511-1.276-2.241-2.673-2.241-1.267 0-2.655.59-2.75 2.286a.237.237 0 0 0 .241.247m2.325 6.443c.61 0 1.029-.394 1.029-.927 0-.552-.42-.94-1.029-.94-.584 0-1.009.388-1.009.94 0 .533.425.927 1.01.927z"/></svg></a></label>
+<div class="cg-btn-group">
+<label><input type="radio" name="cg-server-type" value="open" checked><span>Open</span></label>
+<label><input type="radio" name="cg-server-type" value="private"><span>Private</span></label>
+<label><input type="radio" name="cg-server-type" value="custom"><span>Custom</span></label>
+</div>
+</div>
+<div class="cg-field cg-inline-field">
+<label>Will iOS/iPhone users use this server? <a href="/config/#ios-instant-notifications" target="_blank" class="cg-help"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.496 6.033h.825c.138 0 .248-.113.266-.25.09-.656.54-1.134 1.342-1.134.686 0 1.314.343 1.314 1.168 0 .635-.374.927-.965 1.371-.673.489-1.206 1.06-1.168 1.987l.003.217a.25.25 0 0 0 .25.246h.811a.25.25 0 0 0 .25-.25v-.105c0-.718.273-.927 1.01-1.486.609-.463 1.244-.977 1.244-2.056 0-1.511-1.276-2.241-2.673-2.241-1.267 0-2.655.59-2.75 2.286a.237.237 0 0 0 .241.247m2.325 6.443c.61 0 1.029-.394 1.029-.927 0-.552-.42-.94-1.029-.94-.584 0-1.009.388-1.009.94 0 .533.425.927 1.01.927z"/></svg></a></label>
+<div class="cg-btn-group">
+<label><input type="radio" name="cg-ios" value="no" checked><span>No</span></label>
+<label><input type="radio" name="cg-ios" value="yes"><span>Yes</span></label>
+</div>
+</div>
+<div class="cg-field cg-inline-field">
+<label>Do you want to use ntfy as a UnifiedPush distributor? <a href="/config/#example-unifiedpush" target="_blank" class="cg-help"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.496 6.033h.825c.138 0 .248-.113.266-.25.09-.656.54-1.134 1.342-1.134.686 0 1.314.343 1.314 1.168 0 .635-.374.927-.965 1.371-.673.489-1.206 1.06-1.168 1.987l.003.217a.25.25 0 0 0 .25.246h.811a.25.25 0 0 0 .25-.25v-.105c0-.718.273-.927 1.01-1.486.609-.463 1.244-.977 1.244-2.056 0-1.511-1.276-2.241-2.673-2.241-1.267 0-2.655.59-2.75 2.286a.237.237 0 0 0 .241.247m2.325 6.443c.61 0 1.029-.394 1.029-.927 0-.552-.42-.94-1.029-.94-.584 0-1.009.388-1.009.94 0 .533.425.927 1.01.927z"/></svg></a></label>
+<div class="cg-btn-group">
+<label><input type="radio" name="cg-unifiedpush" value="no" checked><span>No</span></label>
+<label><input type="radio" name="cg-unifiedpush" value="yes"><span>Yes</span></label>
+</div>
+</div>
+<div class="cg-field">
+<label>Which features do you want to enable?</label>
+<div class="cg-feature-grid">
+<div class="cg-feature-row"><label><input type="checkbox" id="cg-feat-auth"> User management and access control</label><button type="button" class="cg-btn-configure cg-hidden" data-panel="cg-panel-auth">Configure</button></div>
+<div class="cg-feature-row"><label><input type="checkbox" id="cg-feat-cache"> Persistent message cache</label><button type="button" class="cg-btn-configure cg-hidden" data-panel="cg-panel-cache">Configure</button></div>
+<div class="cg-feature-row"><label><input type="checkbox" id="cg-feat-attach"> Attachments</label><button type="button" class="cg-btn-configure cg-hidden" data-panel="cg-panel-attach">Configure</button></div>
+<div class="cg-feature-row"><label><input type="checkbox" id="cg-feat-webpush"> Web push</label><button type="button" class="cg-btn-configure cg-hidden" data-panel="cg-panel-webpush">Configure</button></div>
+<div class="cg-feature-row"><label><input type="checkbox" id="cg-feat-smtp-out"> Email notifications</label><button type="button" class="cg-btn-configure cg-hidden" data-panel="cg-panel-email">Configure</button></div>
+<div class="cg-feature-row"><label><input type="checkbox" id="cg-feat-smtp-in"> Email publishing</label><button type="button" class="cg-btn-configure cg-hidden" data-panel="cg-panel-email">Configure</button></div>
+</div>
+</div>
+<div class="cg-field cg-inline-field cg-hidden" id="cg-wizard-db">
+<label>Which database backend would you like to use? <a href="/config/#database-options" target="_blank" class="cg-help"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.496 6.033h.825c.138 0 .248-.113.266-.25.09-.656.54-1.134 1.342-1.134.686 0 1.314.343 1.314 1.168 0 .635-.374.927-.965 1.371-.673.489-1.206 1.06-1.168 1.987l.003.217a.25.25 0 0 0 .25.246h.811a.25.25 0 0 0 .25-.25v-.105c0-.718.273-.927 1.01-1.486.609-.463 1.244-.977 1.244-2.056 0-1.511-1.276-2.241-2.673-2.241-1.267 0-2.655.59-2.75 2.286a.237.237 0 0 0 .241.247m2.325 6.443c.61 0 1.029-.394 1.029-.927 0-.552-.42-.94-1.029-.94-.584 0-1.009.388-1.009.94 0 .533.425.927 1.01.927z"/></svg></a></label>
+<div class="cg-btn-group">
+<label><input type="radio" name="cg-db-type" value="sqlite" checked><span>SQLite</span></label>
+<label><input type="radio" name="cg-db-type" value="postgres"><span>PostgreSQL</span></label>
+</div>
+</div>
+</div>
+<div class="cg-panel" id="cg-panel-auth">
+<div class="cg-panel-desc">Configure user management, access control, and provisioned users/ACLs. See <a href="/config/#access-control" target="_blank">access control</a> for details.</div>
+<div class="cg-field cg-inline-field">
+<label>Where should the user database be stored?</label>
+<input type="text" data-key="auth-file" placeholder="/var/lib/ntfy/auth.db">
+</div>
+<div class="cg-field cg-inline-field">
+<label>What should the default access policy be? <a href="/config/#access-control" target="_blank" class="cg-help"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.496 6.033h.825c.138 0 .248-.113.266-.25.09-.656.54-1.134 1.342-1.134.686 0 1.314.343 1.314 1.168 0 .635-.374.927-.965 1.371-.673.489-1.206 1.06-1.168 1.987l.003.217a.25.25 0 0 0 .25.246h.811a.25.25 0 0 0 .25-.25v-.105c0-.718.273-.927 1.01-1.486.609-.463 1.244-.977 1.244-2.056 0-1.511-1.276-2.241-2.673-2.241-1.267 0-2.655.59-2.75 2.286a.237.237 0 0 0 .241.247m2.325 6.443c.61 0 1.029-.394 1.029-.927 0-.552-.42-.94-1.029-.94-.584 0-1.009.388-1.009.94 0 .533.425.927 1.01.927z"/></svg></a></label>
+<select id="cg-default-access-select">
+<option value="read-write" selected>Read &amp; Write</option>
+<option value="read-only">Read Only</option>
+<option value="write-only">Write Only</option>
+<option value="deny-all">Deny All</option>
+</select>
+</div>
+<div class="cg-field cg-inline-field">
+<label>Should login to the web app be enabled?</label>
+<div class="cg-btn-group">
+<label><input type="radio" name="cg-login-mode" value="disabled" checked><span>Disabled</span></label>
+<label><input type="radio" name="cg-login-mode" value="enabled"><span>Enabled</span></label>
+<label><input type="radio" name="cg-login-mode" value="required"><span>Required</span></label>
+</div>
+</div>
+<div class="cg-field cg-inline-field">
+<label>Should it be possible to sign up via the web app?</label>
+<div class="cg-btn-group">
+<label><input type="radio" name="cg-enable-signup" value="no" checked><span>No</span></label>
+<label><input type="radio" name="cg-enable-signup" value="yes"><span>Yes</span></label>
+</div>
+</div>
+<input type="hidden" data-key="auth-default-access">
+<input type="checkbox" data-key="enable-login" id="cg-enable-login-hidden" style="display:none">
+<input type="checkbox" data-key="require-login" id="cg-require-login-hidden" style="display:none">
+<input type="checkbox" data-key="enable-signup" id="cg-enable-signup-hidden" style="display:none">
+<div class="cg-field">
+<label>Provisioned users <a href="/config/#users-and-roles" target="_blank" class="cg-help"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.496 6.033h.825c.138 0 .248-.113.266-.25.09-.656.54-1.134 1.342-1.134.686 0 1.314.343 1.314 1.168 0 .635-.374.927-.965 1.371-.673.489-1.206 1.06-1.168 1.987l.003.217a.25.25 0 0 0 .25.246h.811a.25.25 0 0 0 .25-.25v-.105c0-.718.273-.927 1.01-1.486.609-.463 1.244-.977 1.244-2.056 0-1.511-1.276-2.241-2.673-2.241-1.267 0-2.655.59-2.75 2.286a.237.237 0 0 0 .241.247m2.325 6.443c.61 0 1.029-.394 1.029-.927 0-.552-.42-.94-1.029-.94-.584 0-1.009.388-1.009.94 0 .533.425.927 1.01.927z"/></svg></a></label>
+<div class="cg-repeatable-container" id="cg-auth-users-container"></div>
+<button type="button" class="cg-btn-add" data-add-type="user">+ Add user</button>
+</div>
+<div class="cg-field">
+<label>Provisioned ACLs <a href="/config/#access-control-list-acl" target="_blank" class="cg-help"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.496 6.033h.825c.138 0 .248-.113.266-.25.09-.656.54-1.134 1.342-1.134.686 0 1.314.343 1.314 1.168 0 .635-.374.927-.965 1.371-.673.489-1.206 1.06-1.168 1.987l.003.217a.25.25 0 0 0 .25.246h.811a.25.25 0 0 0 .25-.25v-.105c0-.718.273-.927 1.01-1.486.609-.463 1.244-.977 1.244-2.056 0-1.511-1.276-2.241-2.673-2.241-1.267 0-2.655.59-2.75 2.286a.237.237 0 0 0 .241.247m2.325 6.443c.61 0 1.029-.394 1.029-.927 0-.552-.42-.94-1.029-.94-.584 0-1.009.388-1.009.94 0 .533.425.927 1.01.927z"/></svg></a></label>
+<div class="cg-repeatable-container" id="cg-auth-acls-container"></div>
+<button type="button" class="cg-btn-add" data-add-type="acl">+ Add ACL</button>
+</div>
+<div class="cg-field">
+<label>Provisioned tokens <a href="/config/#access-tokens" target="_blank" class="cg-help"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.496 6.033h.825c.138 0 .248-.113.266-.25.09-.656.54-1.134 1.342-1.134.686 0 1.314.343 1.314 1.168 0 .635-.374.927-.965 1.371-.673.489-1.206 1.06-1.168 1.987l.003.217a.25.25 0 0 0 .25.246h.811a.25.25 0 0 0 .25-.25v-.105c0-.718.273-.927 1.01-1.486.609-.463 1.244-.977 1.244-2.056 0-1.511-1.276-2.241-2.673-2.241-1.267 0-2.655.59-2.75 2.286a.237.237 0 0 0 .241.247m2.325 6.443c.61 0 1.029-.394 1.029-.927 0-.552-.42-.94-1.029-.94-.584 0-1.009.388-1.009.94 0 .533.425.927 1.01.927z"/></svg></a></label>
+<div class="cg-repeatable-container" id="cg-auth-tokens-container"></div>
+<button type="button" class="cg-btn-add" data-add-type="token">+ Add token</button>
+</div>
+</div>
+<div class="cg-panel" id="cg-panel-cache">
+<div class="cg-panel-desc">Configure the message cache to allow devices to retrieve missed notifications. See <a href="/config/#message-cache" target="_blank">message cache</a> for details.</div>
+<div class="cg-field cg-inline-field" id="cg-cache-file-field">
+<label>Where should the cache be stored?</label>
+<input type="text" data-key="cache-file" placeholder="/var/cache/ntfy/cache.db">
+</div>
+<div class="cg-field cg-inline-field">
+<label>How long should messages be cached?</label>
+<input type="text" data-key="cache-duration" placeholder="12h">
+</div>
+</div>
+<div class="cg-panel" id="cg-panel-attach">
+<div class="cg-panel-desc">Allow users to upload and attach files to notifications. See <a href="/config/#attachments" target="_blank">attachments</a> for details.</div>
+<div class="cg-field cg-inline-field">
+<label>Where should attachments be stored?</label>
+<input type="text" data-key="attachment-cache-dir" placeholder="/var/cache/ntfy/attachments">
+</div>
+<div class="cg-field cg-inline-field">
+<label>Max file size per attachment?</label>
+<input type="text" data-key="attachment-file-size-limit" placeholder="15M">
+</div>
+<div class="cg-field cg-inline-field">
+<label>Total attachment storage limit?</label>
+<input type="text" data-key="attachment-total-size-limit" placeholder="5G">
+</div>
+<div class="cg-field cg-inline-field">
+<label>How long before attachments expire?</label>
+<input type="text" data-key="attachment-expiry-duration" placeholder="3h">
+</div>
+</div>
+<div class="cg-panel" id="cg-panel-webpush">
+<div class="cg-panel-desc">Enable browser push notifications via the Web Push API. VAPID keys are generated automatically. See <a href="/config/#web-push" target="_blank">web push</a> for details.</div>
+<div class="cg-field cg-inline-field">
+<label>Where should web push data be stored?</label>
+<input type="text" data-key="web-push-file" placeholder="/var/lib/ntfy/webpush.db">
+</div>
+<div class="cg-field cg-inline-field">
+<label>Contact email address</label>
+<input type="text" data-key="web-push-email-address" placeholder="admin@example.com">
+</div>
+<div class="cg-field cg-inline-field">
+<label>Private key</label>
+<input type="text" data-key="web-push-private-key" placeholder="Auto-generated" readonly>
+</div>
+<div class="cg-field cg-inline-field">
+<label>Public key</label>
+<input type="text" data-key="web-push-public-key" placeholder="Auto-generated" readonly>
+</div>
+<div class="cg-field cg-inline-field">
+<label></label>
+<button type="button" id="cg-regen-keys" class="cg-btn-add">Regenerate keys</button>
+</div>
+</div>
+<div class="cg-panel" id="cg-panel-email">
+<div class="cg-panel-desc">Configure outgoing email notifications and/or incoming email publishing. See <a href="/config/#e-mail-notifications" target="_blank">email notifications</a> and <a href="/config/#e-mail-publishing" target="_blank">email publishing</a> for details.</div>
+<div id="cg-email-out-section" class="cg-hidden">
+<div class="cg-field"><label><strong>Outgoing (notifications)</strong></label></div>
+<div class="cg-field cg-inline-field">
+<label>SMTP server address</label>
+<input type="text" data-key="smtp-sender-addr" placeholder="smtp.example.com:587">
+</div>
+<div class="cg-field cg-inline-field">
+<label>Sender email</label>
+<input type="text" data-key="smtp-sender-from" placeholder="ntfy@example.com">
+</div>
+<div class="cg-field cg-inline-field">
+<label>SMTP username</label>
+<input type="text" data-key="smtp-sender-user" placeholder="Username">
+</div>
+<div class="cg-field cg-inline-field">
+<label>SMTP password</label>
+<input type="password" data-key="smtp-sender-pass" placeholder="Password">
+</div>
+<div class="cg-field cg-inline-field">
+<label>Require email verification</label>
+<div class="cg-btn-group">
+<label><input type="radio" name="cg-smtp-sender-verify" value="no" checked><span>No</span></label>
+<label><input type="radio" name="cg-smtp-sender-verify" value="yes"><span>Yes</span></label>
+</div>
+</div>
+<input type="checkbox" data-key="smtp-sender-verify" id="cg-smtp-sender-verify-hidden" style="display:none">
+</div>
+<div id="cg-email-in-section" class="cg-hidden">
+<div class="cg-field"><label><strong>Incoming (publishing)</strong></label></div>
+<div class="cg-field cg-inline-field">
+<label>Listen address</label>
+<input type="text" data-key="smtp-server-listen" placeholder=":25">
+</div>
+<div class="cg-field cg-inline-field">
+<label>Domain</label>
+<input type="text" data-key="smtp-server-domain" placeholder="ntfy.example.com">
+</div>
+<div class="cg-field cg-inline-field">
+<label>Address prefix</label>
+<input type="text" data-key="smtp-server-addr-prefix" placeholder="ntfy-">
+</div>
+</div>
+</div>
+<div class="cg-panel" id="cg-panel-database">
+<div class="cg-panel-desc">Configure the PostgreSQL connection. See <a href="/config/#postgresql" target="_blank">PostgreSQL</a> for details.</div>
+<div class="cg-field">
+<label>Database URL</label>
+<input type="text" data-key="database-url" placeholder="postgres://user:pass@host:5432/ntfy">
+</div>
+</div>
+<input type="hidden" data-key="upstream-base-url">
+<input type="checkbox" data-key="behind-proxy" id="cg-behind-proxy" style="display:none">
+</div>
+</div>
+<div id="cg-right">
+<div class="cg-output-tabs">
+<div class="cg-output-tab active" data-format="server-yml">server.yml</div>
+<div class="cg-output-tab" data-format="docker-compose">docker-compose.yml</div>
+<div class="cg-output-tab" data-format="env-vars">Env variables</div>
+<button type="button" id="cg-copy-btn" class="cg-btn-copy" title="Copy to clipboard"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+</div>
+<div class="cg-output-wrap">
+<pre><code id="cg-code"><span class="cg-empty-msg">Configure options on the left to generate your config...</span></code></pre>
+<div id="cg-warnings" class="cg-hidden"></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+## Database options
+ntfy uses a database for storing messages ([message cache](#message-cache)), users and [access control](#access-control), and [web push](#web-push) subscriptions.
+You can choose between **SQLite** and **PostgreSQL** as the database backend.
+
+### SQLite
+By default, ntfy uses SQLite with separate database files for each store. This is the simplest setup and requires
+no external dependencies:
+
+* `cache-file`: Database file for the [message cache](#message-cache).
+* `auth-file`: Database file for authentication and [access control](#access-control). If set, enables auth.
+* `web-push-file`: Database file for [web push](#web-push) subscriptions.
+
+### PostgreSQL
+As an alternative, you can configure ntfy to use PostgreSQL for **all** database-backed stores by setting the
+`database-url` option to a PostgreSQL connection string.
+
+When `database-url` is set, ntfy will use PostgreSQL for the [message cache](#message-cache),
+[access control](#access-control), and [web push](#web-push) subscriptions instead of SQLite. The `cache-file`,
+`auth-file`, and `web-push-file` options **must not** be set in this case.
+
+Note that setting `database-url` implicitly enables authentication and access control (equivalent to setting
+`auth-file` with SQLite). The default access is `read-write`, so anonymous users can still read and write to all
+topics. To restrict access, set `auth-default-access` to `deny-all` (see [access control](#access-control)).
+
+You can also set this via the environment variable `NTFY_DATABASE_URL` or the command line flag `--database-url`.
+
+To offload read-heavy queries from the primary database, you can optionally configure one or more read replicas
+using the `database-replica-urls` option. When configured, non-critical read-only queries (e.g. fetching messages, checking access permissions, etc)
+are distributed across the replicas using round-robin, while all writes and correctness-critical reads continue to go
+to the primary. If a replica becomes unhealthy, ntfy automatically falls back to the primary until the replica recovers.
+You can also set this via the environment variable `NTFY_DATABASE_REPLICA_URLS` (comma-separated) or the command line
+flag `--database-replica-urls`.
+
+Examples:
+
+=== "Simple"
+    ```yaml
+    database-url: "postgres://user:pass@host:5432/ntfy"
+    ```
+    
+=== "With SSL and pool tuning"
+    ```yaml
+    database-url: "postgres://user:pass@host:5432/ntfy?sslmode=require&pool_max_conns=50&pool_conn_max_idle_time=5m"
+    ```
+    
+=== "With CA certificate"
+    ```yaml
+    database-url: "postgres://user:pass@host:25060/ntfy?sslmode=require&sslrootcert=/etc/ntfy/db-ca-cert.pem&pool_max_conns=30"
+    ```
+
+=== "With read replicas"
+    ```yaml
+    database-url: "postgres://user:pass@primary:5432/ntfy?sslmode=require&sslrootcert=/etc/ntfy/db-ca-cert.pem&pool_max_conns=30"
+    database-replica-urls:
+      - "postgres://user:pass@replica1:5432/ntfy?sslmode=require&sslrootcert=/etc/ntfy/db-ca-cert.pem&pool_max_conns=30"
+      - "postgres://user:pass@replica2:5432/ntfy?sslmode=require&sslrootcert=/etc/ntfy/db-ca-cert.pem&pool_max_conns=30"
+    ```
+
+The database URL supports the standard [PostgreSQL connection parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS)
+as query parameters, such as `sslmode`, `connect_timeout`, `sslcert`, `sslkey`, `sslrootcert`, and `application_name`.
+See the [pgx driver documentation](https://pkg.go.dev/github.com/jackc/pgx/v5) for the full list of supported parameters.
+
+In addition, ntfy supports the following custom query parameters to tune the connection pool (these apply to both
+the primary and replica URLs):
+
+| Parameter                 | Default | Description                                                                      |
+|---------------------------|---------|----------------------------------------------------------------------------------|
+| `pool_max_conns`          | 10      | Maximum number of open connections to the database                               |
+| `pool_max_idle_conns`     | = `pool_max_conns` | Maximum number of idle connections in the pool                          |
+| `pool_conn_max_lifetime`  | -       | Maximum amount of time a connection may be reused (Go duration, e.g. `5m`, `1h`) |
+| `pool_conn_max_idle_time` | -       | Maximum amount of time a connection may be idle (Go duration, e.g. `30s`, `5m`)  |
+
+For a busy server, the recommended settings are `pool_max_conns=30&pool_conn_max_lifetime=15m&pool_conn_max_idle_time=5m`
+on the primary and on every replica (this is what ntfy.sh runs). The reasoning:
+
+* `pool_max_conns`: the message writer uses one connection per batch, and every other query (polls, access checks,
+  stats) uses one for a few milliseconds, so 30 covers publish bursts of hundreds of messages per second. Make sure the
+  PostgreSQL `max_connections` setting covers the pool size times the number of ntfy instances, plus other clients.
+* `pool_max_idle_conns`: leave it at the default (equal to `pool_max_conns`). A smaller value closes connections after
+  every burst, so the next burst pays a DNS lookup, a TCP/TLS handshake and authentication per query.
+* `pool_conn_max_lifetime`: a long-lived PostgreSQL backend keeps growing (statement and catalog caches are never given
+  back), and a managed database may move to a new address on failover; recycling connections every 15 minutes bounds
+  both without noticeable churn.
+* `pool_conn_max_idle_time`: releases connections the server does not need overnight; under steady traffic the pool
+  rotates through all connections, so the limit never triggers.
+
+
 ## Message cache
 If desired, ntfy can temporarily keep notifications in an in-memory or an on-disk cache. Caching messages for a short period
 of time is important to allow [phones](subscribe/phone.md) and other devices with brittle Internet connections to be able to retrieve
 notifications that they may have missed. 
 
 By default, ntfy keeps messages **in-memory for 12 hours**, which means that **cached messages do not survive an application
-restart**. You can override this behavior using the following config settings:
+restart**. You can override this behavior by setting `cache-file` (SQLite) or `database-url` (PostgreSQL).
 
-* `cache-file`: if set, ntfy will store messages in a SQLite based cache (default is empty, which means in-memory cache).
-  **This is required if you'd like messages to be retained across restarts**.
 * `cache-duration`: defines the duration for which messages are stored in the cache (default is `12h`). 
 
 You can also entirely disable the cache by setting `cache-duration` to `0`. When the cache is disabled, messages are only
@@ -146,30 +511,42 @@ Subscribers can retrieve cached messaging using the [`poll=1` parameter](subscri
 
 ## Attachments
 If desired, you may allow users to upload and [attach files to notifications](publish.md#attachments). To enable
-this feature, you have to simply configure an attachment cache directory and a base URL (`attachment-cache-dir`, `base-url`). 
-Once these options are set and the directory is writable by the server user, you can upload attachments via PUT.
+this feature, you have to configure an attachment storage backend and a base URL (`base-url`). Attachments can be stored
+either on the [local filesystem](#filesystem-storage) or in an [S3-compatible object store](#s3-storage), both using the `attachment-cache-dir` option.
+Once configured, you can upload attachments via PUT.
 
-By default, attachments are stored in the disk-cache **for only 3 hours**. The main reason for this is to avoid legal issues
-and such when hosting user controlled content. Typically, this is more than enough time for the user (or the auto download 
-feature) to download the file. The following config options are relevant to attachments:
+By default, attachments are stored **for only 3 hours**. The main reason for this is to avoid legal issues
+and such when hosting user controlled content. Typically, this is more than enough time for the user (or the auto download
+feature) to download the file. You can increase this time by [purchasing ntfy Pro](https://ntfy.sh/app) via the web app.
+
+The following config options are relevant to attachments:
 
 * `base-url` is the root URL for the ntfy server; this is needed for the generated attachment URLs
-* `attachment-cache-dir` is the cache directory for attached files
-* `attachment-total-size-limit` is the size limit of the on-disk attachment cache (default: 5G)
+* `attachment-cache-dir` is the cache directory for attached files, or an S3 URL for object storage
+* `attachment-total-size-limit` is the size limit of the attachment storage (default: 5G)
 * `attachment-file-size-limit` is the per-file attachment size limit (e.g. 300k, 2M, 100M, default: 15M)
-* `attachment-expiry-duration` is the duration after which uploaded attachments will be deleted (e.g. 3h, 20h, default: 3h)
+* `attachment-expiry-duration` is the duration after which uploaded attachments will be deleted (e.g. 3h, 20h, default: 3h). Attachments never outlive
+  their message, so this is capped at `cache-duration`; set `cache-duration` at least as high if you want longer-lived attachments.
 
-Here's an example config using mostly the defaults (except for the cache directory, which is empty by default): 
+!!! warning
+    ntfy takes full control over the attachment directory or S3 bucket. Files that match the message ID format without
+    entries in the message table will be deleted. **Do not use a directory or S3 bucket that is also used for something else.** 
+
+Please also refer to the [rate limiting](#rate-limiting) settings below, specifically `visitor-attachment-total-size-limit`
+and `visitor-attachment-daily-bandwidth-limit`. Setting these conservatively is necessary to avoid abuse.
+
+### Filesystem storage
+Here's an example config using the local filesystem for attachment storage:
 
 === "/etc/ntfy/server.yml (minimal)"
     ``` yaml
-    base-url: "https://ntfy.sh"
+    base-url: "https://ntfy.example.com"
     attachment-cache-dir: "/var/cache/ntfy/attachments"
     ```
 
 === "/etc/ntfy/server.yml (all options)"
     ``` yaml
-    base-url: "https://ntfy.sh"
+    base-url: "https://ntfy.example.com"
     attachment-cache-dir: "/var/cache/ntfy/attachments"
     attachment-total-size-limit: "5G"
     attachment-file-size-limit: "15M"
@@ -178,30 +555,108 @@ Here's an example config using mostly the defaults (except for the cache directo
     visitor-attachment-daily-bandwidth-limit: "500M"
     ```
 
-Please also refer to the [rate limiting](#rate-limiting) settings below, specifically `visitor-attachment-total-size-limit`
-and `visitor-attachment-daily-bandwidth-limit`. Setting these conservatively is necessary to avoid abuse.
+### S3 storage
+As an alternative to the local filesystem, you can store attachments in an S3-compatible object store (e.g. [AWS S3](https://aws.amazon.com/s3/),
+[DigitalOcean Spaces](https://www.digitalocean.com/products/spaces)). This is useful for HA/cloud deployments where you don't want to rely on local disk storage. 
+To use an S3-compatible storage for attachments, set `attachment-cache-dir` to an S3 URL with the following format:
+
+```
+s3://ACCESS_KEY:SECRET_KEY@BUCKET[/PREFIX]?region=REGION[&endpoint=ENDPOINT][&disable_http2=true]
+```
+
+Here are a few examples:
+
+=== "/etc/ntfy/server.yml (DigitalOcean Spaces)"
+    ``` yaml
+    base-url: "https://ntfy.example.com"
+    attachment-cache-dir: "s3://ACCESS_KEY:SECRET_KEY@my-bucket/attachments?region=nyc3&endpoint=https://nyc3.digitaloceanspaces.com&disable_http2=true"
+    ```
+
+=== "/etc/ntfy/server.yml (AWS S3)"
+    ``` yaml
+    base-url: "https://ntfy.example.com"
+    attachment-cache-dir: "s3://ACCESS_KEY:SECRET_KEY@my-bucket/attachments?region=us-east-1"
+    ```
+
+=== "/etc/ntfy/server.yml (custom endpoint)"
+    ``` yaml
+    base-url: "https://ntfy.example.com"
+    attachment-cache-dir: "s3://ACCESS_KEY:SECRET_KEY@my-bucket/attachments?region=us-east-1&endpoint=https://s3.example.com"
+    ```
+
+Note that the access key and secret key may have to be URL encoded. For instance, a secret key `YmxhY+mxhYmxhC` (note the `+`) should
+be encoded as `YmxhY%2BmxhYmxhC` (note the `%2B`), so the URL would be `s3://ACCESS_KEY:YmxhY%2BmxhYmxhC@my-bucket/attachments...`.
+
+If you experience upload failures with HTTP/2 stream errors (common with DigitalOcean Spaces and some other S3-compatible providers),
+add `&disable_http2=true` to force HTTP/1.1 connections.
+
+!!! info
+    ntfy.sh is hosted and sponsored by DigitalOcean. I can highly recommend their public cloud offering. It's been rock solid
+    for 4 years. They offer an S3-compatible storage for $5/month and 250 GB of storage, with 1 TiB of bandwidth. 
+    Also, if you **use [this referral link](https://m.do.co/c/442b929528db), you can get $200 credit**.
+
+For AWS S3, the IAM user needs the following permissions on the bucket:
+
+``` json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:ListBucketMultipartUploads"
+            ],
+            "Resource": "arn:aws:s3:::BUCKET_NAME"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:AbortMultipartUpload"
+            ],
+            "Resource": "arn:aws:s3:::BUCKET_NAME/*"
+        }
+    ]
+}
+```
 
 ## Access control
 By default, the ntfy server is open for everyone, meaning **everyone can read and write to any topic** (this is how
 ntfy.sh is configured). To restrict access to your own server, you can optionally configure authentication and authorization. 
 
-ntfy's auth is implemented with a simple [SQLite](https://www.sqlite.org/)-based backend. It implements two roles 
-(`user` and `admin`) and per-topic `read` and `write` permissions using an [access control list (ACL)](https://en.wikipedia.org/wiki/Access-control_list). 
-Access control entries can be applied to users as well as the special everyone user (`*`), which represents anonymous API access. 
+ntfy's auth implements two roles (`user` and `admin`) and per-topic `read` and `write` permissions using an 
+[access control list (ACL)](https://en.wikipedia.org/wiki/Access-control_list). Access control entries can be applied 
+to users as well as the special everyone user (`*`), which represents anonymous API access. 
 
-To set up auth, simply **configure the following two options**:
+To set up auth, **configure the following options**:
 
-* `auth-file` is the user/access database; it is created automatically if it doesn't already exist; suggested 
-  location `/var/lib/ntfy/user.db` (easiest if deb/rpm package is used)
+* `auth-file` is the user/access database (SQLite); it is created automatically if it doesn't already exist; suggested 
+  location `/var/lib/ntfy/user.db` (easiest if deb/rpm package is used). Alternatively, if `database-url` is set, 
+  auth is automatically enabled using PostgreSQL (see [database options](#database-options)).
 * `auth-default-access` defines the default/fallback access if no access control entry is found; it can be
-  set to `read-write` (default), `read-only`, `write-only` or `deny-all`.
+  set to `read-write` (default), `read-only`, `write-only` or `deny-all`. **If you are setting up a private instance,
+  you'll want to set this to `deny-all`** (see [private instance example](#example-private-instance)).
 
-Once configured, you can use the `ntfy user` command to [add or modify users](#users-and-roles), and the `ntfy access` command
-lets you [modify the access control list](#access-control-list-acl) for specific users and topic patterns. Both of these 
-commands **directly edit the auth database** (as defined in `auth-file`), so they only work on the server, and only if the user 
-accessing them has the right permissions.
+Once configured, you can use 
+
+- the `ntfy user` command and the `auth-users` config option to [add or modify users](#users-and-roles)
+- the `ntfy access` command and the `auth-access` option to [modify the access control list](#access-control-list-acl)
+and topic patterns, and
+- the `ntfy token` command and the `auth-tokens` config option to [manage access tokens](#access-tokens) for users.
+
+These commands **directly edit the auth database** (as defined in `auth-file`), so they only work on the server, 
+and only if the user accessing them has the right permissions.
 
 ### Users and roles
+Users can be added to the ntfy user database in two different ways
+
+* [Using the CLI](#users-via-the-cli): Using the `ntfy user` command, you can manually add/update/remove users.
+* [In the config](#users-via-the-config): You can provision users in the `server.yml` file via `auth-users` key.
+
+#### Users via the CLI
 The `ntfy user` command allows you to add/remove/change users in the ntfy user database, as well as change
 passwords or roles (`user` or `admin`). In practice, you'll often just create one admin 
 user with `ntfy user add --role=admin ...` and be done with all this (see [example below](#example-private-instance)).
@@ -222,12 +677,54 @@ ntfy user del phil                 # Delete user phil
 ntfy user change-pass phil         # Change password for user phil
 ntfy user change-role phil admin   # Make user phil an admin
 ntfy user change-tier phil pro     # Change phil's tier to "pro"
+ntfy user hash                     # Generate password hash, use with auth-users config option
 ```
+
+#### Users via the config
+As an alternative to manually creating users via the `ntfy user` CLI command, you can provision users declaratively in
+the `server.yml` file by adding them to the `auth-users` array. This is useful for general admins, or if you'd like to
+deploy your ntfy server via Docker/Ansible without manually editing the database.
+
+The `auth-users` option is a list of users that are automatically created/updated when the server starts. Users
+previously defined in the config but later removed will be deleted. Each entry is defined in the format `<username>:<password-hash>:<role>`.
+
+Here's an example with two users: `phil` is an admin, `ben` is a regular user.
+
+=== "Declarative users in /etc/ntfy/server.yml"
+    ``` yaml
+    auth-file: "/var/lib/ntfy/user.db"
+    auth-users:
+      - "phil:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:admin"
+      - "ben:$2a$10$NKbrNb7HPMjtQXWJ0f1pouw03LDLT/WzlO9VAv44x84bRCkh19h6m:user"
+    ```
+
+=== "Declarative users via env variables"
+    ```
+    # Comma-separated list, use single quotes to avoid issues with the bcrypt hash 
+    NTFY_AUTH_FILE='/var/lib/ntfy/user.db'
+    NTFY_AUTH_USERS='phil:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:admin,ben:$2a$10$NKbrNb7HPMjtQXWJ0f1pouw03LDLT/WzlO9VAv44x84bRCkh19h6m:user'
+    ```
+
+The password hash can be created using `ntfy user hash` or an [online bcrypt generator](https://bcrypt-generator.com/) (though
+note that you're putting your password in an untrusted website).
+
+!!! important
+    Users added declaratively via the config file are marked in the database as "provisioned users". Removing users
+    from the config file will **delete them from the database** the next time ntfy is restarted.
+
+    Also, users that were originally manually created will be "upgraded" to be provisioned users if they are added to
+    the config. Adding a user manually, then adding it to the config, and then removing it from the config will hence
+    lead to the **deletion of that user**.
 
 ### Access control list (ACL)
 The access control list (ACL) **manages access to topics for non-admin users, and for anonymous access (`everyone`/`*`)**.
-Each entry represents the access permissions for a user to a specific topic or topic pattern. 
+Each entry represents the access permissions for a user to a specific topic or topic pattern. Entries can be created in
+two different ways:
 
+* [Using the CLI](#acl-entries-via-the-cli): Using the `ntfy access` command, you can manually edit the access control list.
+* [In the config](#acl-entries-via-the-config): You can provision ACL entries in the `server.yml` file via `auth-access` key.
+
+#### ACL entries via the CLI
 The ACL can be displayed or modified with the `ntfy access` command:
 
 ```
@@ -283,6 +780,51 @@ User `ben` has three topic-specific entries. He can read, but not write to topic
 to topic `garagedoor` and all topics starting with the word `alerts` (wildcards). Clients that are not authenticated
 (called `*`/`everyone`) only have read access to the `announcements` and `server-stats` topics.
 
+#### ACL entries via the config
+As an alternative to manually creating ACL entries via the `ntfy access` CLI command, you can provision access control
+entries declaratively in the `server.yml` file by adding them to the `auth-access` array, similar to the `auth-users` 
+option (see [users via the config](#users-via-the-config).
+
+The `auth-access` option is a list of access control entries that are automatically created/updated when the server starts.
+When entries are removed, they are deleted from the database. Each entry is defined in the format `<username>:<topic-pattern>:<access>`.
+
+The `<username>` can be any existing, provisioned user as defined in the `auth-users` section (see [users via the config](#users-via-the-config)),
+or `everyone`/`*` for anonymous access. The `<topic-pattern>` can be a specific topic name or a pattern with wildcards (`*`). The 
+`<access>` can be one of the following:
+
+* `read-write` or `rw`: Allows both publishing to and subscribing to the topic
+* `read-only`, `read`, or `ro`: Allows only subscribing to the topic
+* `write-only`, `write`, or `wo`: Allows only publishing to the topic
+* `deny-all`, `deny`, or `none`: Denies all access to the topic
+
+Here's an example with several ACL entries:
+
+=== "Declarative ACL entries in /etc/ntfy/server.yml"
+    ``` yaml
+    auth-file: "/var/lib/ntfy/user.db"
+    auth-users:
+      - "phil:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:user"
+      - "ben:$2a$10$NKbrNb7HPMjtQXWJ0f1pouw03LDLT/WzlO9VAv44x84bRCkh19h6m:user"
+    auth-access:
+      - "phil:mytopic:rw"
+      - "ben:alerts-*:rw"
+      - "ben:system-logs:ro"
+      - "*:announcements:ro" # or: "everyone:announcements,ro"
+    ```
+
+=== "Declarative ACL entries via env variables"
+    ```
+    # Comma-separated list
+    NTFY_AUTH_FILE='/var/lib/ntfy/user.db'
+    NTFY_AUTH_USERS='phil:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:user,ben:$2a$10$NKbrNb7HPMjtQXWJ0f1pouw03LDLT/WzlO9VAv44x84bRCkh19h6m:user'
+    NTFY_AUTH_ACCESS='phil:mytopic:rw,ben:alerts-*:rw,ben:system-logs:ro,*:announcements:ro'
+    ```
+
+In this example, the `auth-users` section defines two users, `phil` and `ben`. The `auth-access` section defines
+access control entries for these users. `phil` has read-write access to the topic `mytopic`, while `ben` has read-write
+access to all topics starting with `alerts-` and read-only access to the topic `system-logs`. The last entry allows
+anonymous users (i.e. clients that do not authenticate) to read the `announcements` topic.
+
 ### Access tokens
 In addition to username/password auth, ntfy also provides authentication via access tokens. Access tokens are useful
 to avoid having to configure your password across multiple publishing/subscribing applications. For instance, you may
@@ -293,8 +835,14 @@ want to use a dedicated token to publish from your backup host, and one from you
     and deleting the account, every action can be performed with a token. Granular access tokens are on the roadmap,
     but not yet implemented.
 
+You can create access tokens in two different ways:
+
+* [Using the CLI](#tokens-via-the-cli): Using the `ntfy token` command, you can manually add/update/remove tokens.
+* [In the config](#tokens-via-the-config): You can provision access tokens in the `server.yml` file via `auth-tokens` key.
+
+#### Tokens via the CLI
 The `ntfy token` command can be used to manage access tokens for users. Tokens can have labels, and they can expire
-automatically (or never expire). Each user can have up to 20 tokens (hardcoded). 
+automatically (or never expire). Each user can have up to 60 tokens (hardcoded). 
 
 **Example commands** (type `ntfy token --help` or `ntfy token COMMAND --help` for more details):
 ```
@@ -303,6 +851,7 @@ ntfy token list phil                 # Shows list of tokens for user phil
 ntfy token add phil                  # Create token for user phil which never expires
 ntfy token add --expires=2d phil     # Create token for user phil which expires in 2 days
 ntfy token remove phil tk_th2sxr...  # Delete token
+ntfy token generate                  # Generate random token, can be used in auth-tokens config option
 ```
 
 **Creating an access token:**
@@ -310,32 +859,90 @@ ntfy token remove phil tk_th2sxr...  # Delete token
 $ ntfy token add --expires=30d --label="backups" phil
 $ ntfy token list
 user phil
-- tk_AgQdq7mVBoFD37zQVN29RhuMzNIz2 (backups), expires 15 Mar 23 14:33 EDT, accessed from 0.0.0.0 at 13 Feb 23 13:33 EST
+- tk_7eevizlsiwf9yi4uxsrs83r4352o0 (backups), expires 15 Mar 23 14:33 EDT, accessed from 0.0.0.0 at 13 Feb 23 13:33 EST
 ```
 
 Once an access token is created, you can **use it to authenticate against the ntfy server, e.g. when you publish or
 subscribe to topics**. To learn how, check out [authenticate via access tokens](publish.md#access-tokens).
 
-### Example: Private instance
-The easiest way to configure a private instance is to set `auth-default-access` to `deny-all` in the `server.yml`:
+#### Tokens via the config
+Access tokens can be pre-provisioned in the `server.yml` configuration file using the `auth-tokens` config option.
+This is useful for automated setups, Docker environments, or when you want to define tokens declaratively.
 
-=== "/etc/ntfy/server.yml"
+The `auth-tokens` option is a list of access tokens that are automatically created/updated when the server starts.
+When entries are removed, they are deleted from the database. Each entry is defined in the format `<username>:<token>[:<label>]`.
+
+The `<username>` must be an existing, provisioned user, as defined in the `auth-users` section (see [users via the config](#users-via-the-config)).
+The `<token>` is a valid access token, which must start with `tk_` and be 32 characters long (including the prefix). You can generate
+random tokens using the `ntfy token generate` command. The optional `<label>` is a human-readable label for the token, 
+which can be used to identify it later.
+
+Once configured, these tokens can be used to authenticate API requests just like tokens created via the CLI.
+For usage examples, see [authenticate via access tokens](publish.md#access-tokens).
+
+Here's an example:
+
+=== "Declarative tokens in /etc/ntfy/server.yml"
+    ``` yaml
+    auth-file: "/var/lib/ntfy/user.db"
+    auth-users:
+      - "phil:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:admin"
+      - "backup-service:$2a$10$NKbrNb7HPMjtQXWJ0f1pouw03LDLT/WzlO9VAv44x84bRCkh19h6m:user"
+    auth-tokens:
+      - "phil:tk_3gd7d2yftt4b8ixyfe9mnmro88o76"
+      - "backup-service:tk_f099we8uzj7xi5qshzajwp6jffvkz:Backup script"
+    ```
+
+=== "Declarative tokens via env variables"
+    ```
+    # Comma-separated list
+    NTFY_AUTH_FILE='/var/lib/ntfy/user.db'
+    NTFY_AUTH_USERS='phil:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:admin,backup-service:$2a$10$NKbrNb7HPMjtQXWJ0f1pouw03LDLT/WzlO9VAv44x84bRCkh19h6m:user'
+    NTFY_AUTH_TOKENS='phil:tk_3gd7d2yftt4b8ixyfe9mnmro88o76,backup-service:tk_f099we8uzj7xi5qshzajwp6jffvkz:Backup script'
+    ```
+
+In this example, the `auth-users` section defines two users, `phil` and `backup-service`. The `auth-tokens` section
+defines access tokens for these users. `phil` has a token `tk_3gd7d2yftt4b8ixyfe9mnmro88o76`, while `backup-service`
+has a token `tk_f099we8uzj7xi5qshzajwp6jffvkz` with the label "Backup script".
+
+### Example: Private instance
+The easiest way to configure a private instance is to set `auth-default-access` to `deny-all` in the `server.yml`,
+and to configure users in the `auth-users` section (see [users via the config](#users-via-the-config)), 
+access control entries in the `auth-access` section (see [ACL entries via the config](#acl-entries-via-the-config)),
+and access tokens in the `auth-tokens` section (see [access tokens via the config](#tokens-via-the-config)).
+
+Here's an example that defines a single admin user `phil` with the password `mypass`, and a regular user `backup-script`
+with the password `backup-script`. The admin user has full access to all topics, while regular user can only
+access the `backups` topic with read-write permissions. `phil` has a token `tk_3gd7d2yftt4b8ixyfe9mnmro88o76` 
+with the label "My personal token". The `auth-default-access` is set to `deny-all`, which means
+that all other users and anonymous access are denied by default.
+
+=== "Config via /etc/ntfy/server.yml"
     ``` yaml
     auth-file: "/var/lib/ntfy/user.db"
     auth-default-access: "deny-all"
+    auth-users:
+      - "phil:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:admin"
+      - "backup-script:$2a$10$/ehiQt.w7lhTmHXq.RNsOOkIwiPPeWFIzWYO3DRxNixnWKLX8.uj.:user"
+    auth-access:
+      - "backup-script:backups:rw"
+    auth-tokens:
+      - "phil:tk_3gd7d2yftt4b8ixyfe9mnmro88o76:My personal token"
     ```
 
-After that, simply create an `admin` user:
-
-```
-$ ntfy user add --role=admin phil
-password: mypass
-confirm: mypass
-user phil added with role admin 
-```
+=== "Config via env variables"
+    ``` yaml
+    NTFY_AUTH_FILE='/var/lib/ntfy/user.db'
+    NTFY_AUTH_DEFAULT_ACCESS='deny-all'
+    NTFY_AUTH_USERS='phil:$2a$10$YLiO8U21sX1uhZamTLJXHuxgVC0Z/GKISibrKCLohPgtG7yIxSk4C:admin,backup-script:$2a$10$/ehiQt.w7lhTmHXq.RNsOOkIwiPPeWFIzWYO3DRxNixnWKLX8.uj.:user'
+    NTFY_AUTH_ACCESS='backup-script:backups:rw'
+    NTFY_AUTH_TOKENS='phil:tk_3gd7d2yftt4b8ixyfe9mnmro88o76:My personal token'
+    ```
 
 Once you've done that, you can publish and subscribe using [Basic Auth](https://en.wikipedia.org/wiki/Basic_access_authentication) 
-with the given username/password. Be sure to use HTTPS to avoid eavesdropping and exposing your password. Here's a simple example:
+with the given username/password. Be sure to use HTTPS to avoid eavesdropping and exposing your password. 
+
+Here's a simple example (using the credentials of the `phil` user):
 
 === "Command line (curl)"
     ```
@@ -427,13 +1034,19 @@ To allow forwarding messages via e-mail, you can configure an **SMTP server for 
 you can set the `X-Email` header to [send messages via e-mail](publish.md#e-mail-notifications) (e.g. 
 `curl -d "hi there" -H "X-Email: phil@example.com" ntfy.sh/mytopic`).
 
-As of today, only SMTP servers with PLAIN auth and STARTLS are supported. To enable e-mail sending, you must set the 
+!!! info
+    On ntfy.sh, anonymous email sending was disabled due to abuse. To use the email notification feature, 
+    you must verify your email in the web app's [Account section](https://ntfy.sh/account). 
+
+As of today, only SMTP servers with PLAIN or LOGIN auth and STARTTLS are supported. To enable e-mail sending, you must set the
 following settings:
 
 * `base-url` is the root URL for the ntfy server; this is needed for e-mail footer
 * `smtp-sender-addr` is the hostname:port of the SMTP server
 * `smtp-sender-user` and `smtp-sender-pass` are the username and password of the SMTP user
 * `smtp-sender-from` is the e-mail address of the sender
+* `smtp-sender-verify` is a flag that forces email recipient verification when enabled. If set to true, 
+  only verified email recipients can be used in the `X-Email` header.
 
 Here's an example config using [Amazon SES](https://aws.amazon.com/ses/) for outgoing mail (this is how it is 
 configured for `ntfy.sh`):
@@ -445,9 +1058,18 @@ configured for `ntfy.sh`):
     smtp-sender-user: "AKIDEADBEEFAFFE12345"
     smtp-sender-pass: "Abd13Kf+sfAk2DzifjafldkThisIsNotARealKeyOMG."
     smtp-sender-from: "ntfy@ntfy.sh"
+    smtp-sender-verify: true
     ```
 
-Please also refer to the [rate limiting](#rate-limiting) settings below, specifically `visitor-email-limit-burst` 
+By default, any user (including anonymous users) can send email notifications to any address. To require email
+address verification, set `smtp-sender-verify` to `true`. When enabled, anonymous users cannot send emails, and
+authenticated users can only send to *literal* email addresses they have verified in their account settings.
+
+Regardless of this setting, a logged-in user can pass `yes`/`true`/`1` as the `X-Email` value to send to their primary
+verified address (falling back to their first verified address if no primary is designated). `smtp-sender-verify` only
+governs whether arbitrary literal addresses are allowed.
+
+Please also refer to the [rate limiting](#rate-limiting) settings below, specifically `visitor-email-limit-burst`
 and `visitor-email-limit-burst`. Setting these conservatively is necessary to avoid abuse.
 
 ## E-mail publishing
@@ -552,15 +1174,89 @@ It may be desirable to run ntfy behind a proxy (e.g. nginx, HAproxy or Apache), 
 using Let's Encrypt using certbot, or simply because you'd like to share the ports (80/443) with other services. 
 Whatever your reasons may be, there are a few things to consider. 
 
+### IP-based rate limiting
 If you are running ntfy behind a proxy, you should set the `behind-proxy` flag. This will instruct the 
-[rate limiting](#rate-limiting) logic to use the `X-Forwarded-For` header as the primary identifier for a visitor, 
-as opposed to the remote IP address. If the `behind-proxy` flag is not set, all visitors will
-be counted as one, because from the perspective of the ntfy server, they all share the proxy's IP address.
+[rate limiting](#rate-limiting) logic to use the header configured in `proxy-forwarded-header` (default is `X-Forwarded-For`)
+as the primary identifier for a visitor, as opposed to the remote IP address. 
 
-=== "/etc/ntfy/server.yml"
+If the `behind-proxy` flag is not set, all visitors will be counted as one, because from the perspective of the
+ntfy server, they all share the proxy's IP address.
+
+Relevant flags to consider:
+
+* `behind-proxy` makes it so that the real visitor IP address is extracted from the header defined in `proxy-forwarded-header`.
+  Without this, the remote address of the incoming connection is used (default: `false`).
+* `proxy-forwarded-header` is the header to use to identify visitors (default: `X-Forwarded-For`). It may be a single IP address (e.g. `1.2.3.4`),
+  a comma-separated list of IP addresses (e.g. `1.2.3.4, 5.6.7.8`), or an [RFC 7239](https://datatracker.ietf.org/doc/html/rfc7239)-style
+ header (e.g. `for=1.2.3.4;by=proxy.example.com, for=5.6.7.8`).
+* `proxy-trusted-hosts` is a comma-separated list of IP addresses, hosts or CIDRs that are removed from the forwarded header 
+  to determine the real IP address. This is only useful if there are multiple proxies involved that add themselves to
+  the forwarded header (default: empty).
+* `visitor-prefix-bits-ipv4` is the number of bits of the IPv4 address to use for rate limiting (default is `32`, which is the entire
+  IP address). In IPv4 environments, by default, a visitor's **full IPv4 address** is used as-is for rate limiting. This means that
+  if someone publishes messages from multiple IP addresses, they will be counted as separate visitors. You can adjust this by setting the `visitor-prefix-bits-ipv4` config option. To group visitors in a /24 subnet and count them as one, for instance,
+  set it to `24`. In that case, `1.2.3.4` and `1.2.3.99` are treated as the same visitor.
+* `visitor-prefix-bits-ipv6` is the number of bits of the IPv6 address to use for rate limiting (default is `64`, which is a /64 subnet). 
+  In IPv6 environments, by default, a visitor's IP address is **truncated to the /64 subnet**, meaning that `2001:db8:25:86:1::1` and 
+  `2001:db8:25:86:2::1` are treated as the same visitor. Use the `visitor-prefix-bits-ipv6` config option to adjust this behavior.
+  See [IPv6 considerations](#ipv6-considerations) for more details.
+
+=== "/etc/ntfy/server.yml (behind a proxy)"
     ``` yaml
-    # Tell ntfy to use "X-Forwarded-For" to identify visitors
+    # Tell ntfy to use "X-Forwarded-For" header to identify visitors for rate limiting
+    #
+    # Example: If "X-Forwarded-For: 9.9.9.9, 1.2.3.4" is set, 
+    #          the visitor IP will be 1.2.3.4 (right-most address).
+    #
     behind-proxy: true
+    ```
+
+=== "/etc/ntfy/server.yml (X-Client-IP header)"
+    ``` yaml
+    # Tell ntfy to use "X-Client-IP" header to identify visitors for rate limiting
+    #
+    # Example: If "X-Client-IP: 9.9.9.9" is set, 
+    #          the visitor IP will be 9.9.9.9.
+    #
+    behind-proxy: true
+    proxy-forwarded-header: "X-Client-IP"
+    ```
+
+=== "/etc/ntfy/server.yml (Forwarded header)"
+    ``` yaml
+    # Tell ntfy to use "Forwarded" header (RFC 7239) to identify visitors for rate limiting
+    #
+    # Example: If "Forwarded: for=1.2.3.4;by=proxy.example.com, for=9.9.9.9" is set, 
+    #          the visitor IP will be 9.9.9.9.
+    #
+    behind-proxy: true
+    proxy-forwarded-header: "Forwarded"
+    ```
+
+=== "/etc/ntfy/server.yml (multiple proxies)"
+    ``` yaml
+    # Tell ntfy to use "X-Forwarded-For" header to identify visitors for rate limiting,
+    # and to strip the IP addresses of the proxies 1.2.3.4 and 1.2.3.5
+    #
+    # Example: If "X-Forwarded-For: 9.9.9.9, 1.2.3.4" is set, 
+    #          the visitor IP will be 9.9.9.9 (right-most unknown address).
+    #
+    behind-proxy: true
+    proxy-trusted-hosts: "1.2.3.0/24, 1.2.2.2, 2001:db8::/64"
+    ```
+
+=== "/etc/ntfy/server.yml (adjusted IPv4/IPv6 prefixes proxies)"
+    ``` yaml
+    # Tell ntfy to treat visitors as being in a /24 subnet (IPv4) or /48 subnet (IPv6)
+    # as one visitor, so that they are counted as one for rate limiting.
+    #
+    # Example 1: If 1.2.3.4 and 1.2.3.5 publish a message, the visitor 1.2.3.0 will have
+    #            used 2 messages.
+    # Example 2: If 2001:db8:2500:1::1 and 2001:db8:2500:2::1 publish a message, the visitor
+    #            2001:db8:2500:: will have used 2 messages.
+    #
+    visitor-prefix-bits-ipv4: 24
+    visitor-prefix-bits-ipv6: 48
     ```
 
 ### TLS/SSL
@@ -631,7 +1327,7 @@ or the root domain:
       listen 443 ssl http2;
       server_name ntfy.sh;
     
-      # See https://ssl-config.mozilla.org/#server=nginx&version=1.18.0&config=intermediate&openssl=1.1.1k&hsts=false&ocsp=false&guideline=5.6see https://ssl-config.mozilla.org/#server=nginx&version=1.18.0&config=intermediate&openssl=1.1.1k&hsts=false&ocsp=false&guideline=5.6
+      # See https://ssl-config.mozilla.org/#server=nginx&version=1.18.0&config=intermediate&openssl=1.1.1k&hsts=false&ocsp=false&guideline=5.6
       ssl_session_timeout 1d;
       ssl_session_cache shared:MozSSL:10m; # about 40000 sessions
       ssl_session_tickets off;
@@ -698,7 +1394,7 @@ or the root domain:
       listen 443 ssl http2;
       server_name ntfy.sh;
     
-      # See https://ssl-config.mozilla.org/#server=nginx&version=1.18.0&config=intermediate&openssl=1.1.1k&hsts=false&ocsp=false&guideline=5.6see https://ssl-config.mozilla.org/#server=nginx&version=1.18.0&config=intermediate&openssl=1.1.1k&hsts=false&ocsp=false&guideline=5.6
+      # See https://ssl-config.mozilla.org/#server=nginx&version=1.18.0&config=intermediate&openssl=1.1.1k&hsts=false&ocsp=false&guideline=5.6
       ssl_session_timeout 1d;
       ssl_session_cache shared:MozSSL:10m; # about 40000 sessions
       ssl_session_tickets off;
@@ -727,7 +1423,7 @@ or the root domain:
     }
     ```
 
-=== "Apache2"
+=== "Apache >= 2.4.47"
     ```
     # /etc/apache2/sites-*/ntfy.conf
 
@@ -735,6 +1431,7 @@ or the root domain:
         ServerName ntfy.sh
 
         # Proxy connections to ntfy (requires "a2enmod proxy proxy_http")
+        # Use mod_proxy_http for websocket upgrade ('upgrade=websocket'), which requires Apache (httpd) >= 2.4.47.
         ProxyPass / http://127.0.0.1:2586/ upgrade=websocket
         ProxyPassReverse / http://127.0.0.1:2586/
 
@@ -761,8 +1458,71 @@ or the root domain:
         Include /etc/letsencrypt/options-ssl-apache.conf
 
         # Proxy connections to ntfy (requires "a2enmod proxy proxy_http")
+        # Use mod_proxy_http for websocket upgrade ('upgrade=websocket'), which requires Apache (httpd) >= 2.4.47.
         ProxyPass / http://127.0.0.1:2586/ upgrade=websocket
         ProxyPassReverse / http://127.0.0.1:2586/
+
+        SetEnv proxy-nokeepalive 1
+        SetEnv proxy-sendchunked 1
+
+        # Higher than the max message size of 4096 bytes 
+        LimitRequestBody 102400
+	
+    </VirtualHost>
+    ```
+
+=== "Apache < 2.4.47"
+    ```
+    # /etc/apache2/sites-*/ntfy.conf
+
+    <VirtualHost *:80>
+        ServerName ntfy.sh
+
+        # Proxy connections to ntfy (requires "a2enmod proxy")
+        ProxyPass / http://127.0.0.1:2586/
+        ProxyPassReverse / http://127.0.0.1:2586/
+
+        # Enable mod_rewrite (requires "a2enmod rewrite")
+        RewriteEngine on
+        # WebSockets support (requires "a2enmod proxy_wstunnel")
+        # mod_proxy_wstunnel is deprecated as of Apache (httpd) 2.4.47. It also uses more resources since it relies on mod_rewrite.
+        RewriteCond %{HTTP:Upgrade} websocket [NC]
+        RewriteCond %{HTTP:Connection} upgrade [NC]
+        RewriteRule ^/?(.*) "ws://127.0.0.1:2586/$1" [P,L]
+
+        SetEnv proxy-nokeepalive 1
+        SetEnv proxy-sendchunked 1
+
+        # Higher than the max message size of 4096 bytes
+        LimitRequestBody 102400
+        
+        # Redirect HTTP to HTTPS, but only for GET topic addresses, since we want 
+        # it to work with curl without the annoying https:// prefix (requires "a2enmod alias")
+        <If "%{REQUEST_METHOD} == 'GET'">
+            RedirectMatch permanent "^/([-_A-Za-z0-9]{0,64})$" "https://%{SERVER_NAME}/$1"
+        </If>
+
+    </VirtualHost>
+    
+    <VirtualHost *:443>
+        ServerName ntfy.sh
+        
+        SSLEngine on
+        SSLCertificateFile /etc/letsencrypt/live/ntfy.sh/fullchain.pem
+        SSLCertificateKeyFile /etc/letsencrypt/live/ntfy.sh/privkey.pem
+        Include /etc/letsencrypt/options-ssl-apache.conf
+
+        # Proxy connections to ntfy (requires "a2enmod proxy")
+        ProxyPass / http://127.0.0.1:2586/
+        ProxyPassReverse / http://127.0.0.1:2586/
+
+        # Enable mod_rewrite (requires "a2enmod rewrite")
+        RewriteEngine on
+        # WebSockets support (requires "a2enmod proxy_wstunnel")
+        # mod_proxy_wstunnel is deprecated as of Apache (httpd) 2.4.47. It also uses more resources since it relies on mod_rewrite.
+        RewriteCond %{HTTP:Upgrade} websocket [NC]
+        RewriteCond %{HTTP:Connection} upgrade [NC]
+        RewriteRule ^/?(.*) "ws://127.0.0.1:2586/$1" [P,L]
 
         SetEnv proxy-nokeepalive 1
         SetEnv proxy-sendchunked 1
@@ -776,7 +1536,8 @@ or the root domain:
 === "caddy"
     ```
     # Note that this config is most certainly incomplete. Please help out and let me know what's missing
-    # via Discord/Matrix or in a GitHub issue.
+    # via the contact page (https://ntfy.sh/docs/contact/) or in a GitHub issue.
+    # Note: Caddy automatically handles both HTTP and WebSockets with reverse_proxy 
 
     ntfy.sh, http://nfty.sh {
         reverse_proxy 127.0.0.1:2586
@@ -789,6 +1550,36 @@ or the root domain:
             path_regexp ^/([-_a-z0-9]{0,64}$|docs/|static/)
         }
         redir @httpget https://{host}{uri}
+    }
+    ```
+	
+=== "ferron"
+    ``` kdl
+    // /etc/ferron.kdl	
+    // Note that this config is most certainly incomplete. Please help out and let me know what's missing
+    // via the contact page (https://ntfy.sh/docs/contact/) or in a GitHub issue.
+    // Note: Ferron automatically handles both HTTP and WebSockets with proxy 
+
+    ntfy.sh {
+        auto_tls
+        auto_tls_letsencrypt_production
+        protocols "h1" "h2" "h3"
+
+        proxy "http://127.0.0.1:2586"
+
+        // Redirect HTTP to HTTPS, but only for GET topic addresses, since we want
+        // it to work with curl without the annoying https:// prefix
+
+        no_redirect_to_https #true
+
+        condition "is_get_topic" {
+            is_equal "{method}" "GET"
+            is_regex "{path}" "^/([-_a-z0-9]{0,64}$|docs/|static/)"
+        }
+
+        if "is_get_topic" {
+              no_redirect_to_https #false
+        }
     }
     ```
 
@@ -864,7 +1655,7 @@ it'll show `New message` as a popup.
 ## Web Push
 [Web Push](https://developer.mozilla.org/en-US/docs/Web/API/Push_API) ([RFC8030](https://datatracker.ietf.org/doc/html/rfc8030))
 allows ntfy to receive push notifications, even when the ntfy web app (or even the browser, depending on the platform) is closed. 
-When enabled, the user can enable **background notifications** for their topics in the wep app under Settings. Once enabled by the
+When enabled, the user can enable **background notifications** for their topics in the web app under Settings. Once enabled by the
 user, ntfy will forward published messages to the push endpoint (browser-provided, e.g. fcm.googleapis.com), which will then
 forward it to the browser.
 
@@ -873,9 +1664,14 @@ a database to keep track of the browser's subscriptions, and an admin email addr
 
 - `web-push-public-key` is the generated VAPID public key, e.g. AA1234BBCCddvveekaabcdfqwertyuiopasdfghjklzxcvbnm1234567890
 - `web-push-private-key` is the generated VAPID private key, e.g. AA2BB1234567890abcdefzxcvbnm1234567890
-- `web-push-file` is a database file to keep track of browser subscription endpoints, e.g. `/var/cache/ntfy/webpush.db`
+- `web-push-file` is a database file to keep track of browser subscription endpoints, e.g. `/var/cache/ntfy/webpush.db` (not required if `database-url` is set)
 - `web-push-email-address` is the admin email address send to the push provider, e.g. `sysadmin@example.com`
-- `web-push-startup-queries` is an optional list of queries to run on startup` 
+- `web-push-startup-queries` is an optional list of queries to run on startup`
+- `web-push-expiry-warning-duration` defines the duration after which unused subscriptions are sent a warning (default is `55d`)
+- `web-push-expiry-duration` defines the duration after which unused subscriptions will expire (default is `60d`)
+
+Alternatively, you can use PostgreSQL instead of SQLite by setting `database-url`
+(see [PostgreSQL database](#postgresql)).
 
 Limitations:
 
@@ -902,9 +1698,10 @@ web-push-file: /var/cache/ntfy/webpush.db
 web-push-email-address: sysadmin@example.com
 ```
 
-The `web-push-file` is used to store the push subscriptions. Unused subscriptions will send out a warning after 7 days,
-and will automatically expire after 9 days (not configurable). If the gateway returns an error (e.g. 410 Gone when a user has unsubscribed),
-subscriptions are also removed automatically.
+The `web-push-file` is used to store the push subscriptions in a local SQLite database. Alternatively, if `database-url`
+is set, subscriptions are stored in PostgreSQL and `web-push-file` is not required. Unused subscriptions will send out
+a warning after 55 days, and will automatically expire after 60 days (default). If the gateway returns an error
+(e.g. 410 Gone when a user has unsubscribed), subscriptions are also removed automatically.
 
 The web app refreshes subscriptions on start and regularly on an interval, but this file should be persisted across restarts. If the subscription
 file is deleted or lost, any web apps that aren't open will not receive new web push notifications until you open then.
@@ -991,9 +1788,84 @@ are the easiest), and then configure the following options:
 * `twilio-auth-token` is the Twilio auth token, e.g. affebeef258625862586258625862586
 * `twilio-phone-number` is the outgoing phone number you purchased, e.g. +18775132586 
 * `twilio-verify-service` is the Twilio Verify service SID, e.g. VA12345beefbeef67890beefbeef122586
+* `twilio-call-format` is the custom Twilio markup ([TwiML](https://www.twilio.com/docs/voice/twiml)) to use for phone calls (optional)
 
 After you have configured phone calls, create a [tier](#tiers) with a call limit (e.g. `ntfy tier create --call-limit=10 ...`),
 and then assign it to a user. Users may then use the `X-Call` header to receive a phone call when publishing a message.
+
+To customize the message that is spoken out loud, set the `twilio-call-format` option with [TwiML](https://www.twilio.com/docs/voice/twiml). The format is
+rendered as a [Go template](https://pkg.go.dev/text/template), so you can use the following fields from the message:
+
+* `{{.Topic}}` is the topic name
+* `{{.Message}}` is the message body
+* `{{.Title}}` is the message title
+* `{{.Tags}}` is a list of tags
+* `{{.Priority}}` is the message priority
+* `{{.Sender}}` is the IP address or username of the sender
+
+Here's an example:
+
+=== "Custom TwiML (English)"
+    ``` yaml
+    twilio-account: "AC12345beefbeef67890beefbeef122586"
+    twilio-auth-token: "affebeef258625862586258625862586"
+    twilio-phone-number: "+18775132586"
+    twilio-verify-service: "VA12345beefbeef67890beefbeef122586"
+    twilio-call-format: |
+      <Response>
+        <Pause length="1"/>
+        <Say loop="3">
+          Yo yo yo, you should totally check out this message for {{.Topic}}.
+          {{ if eq .Priority 5 }}
+            It's really really important, dude. So listen up!
+          {{ end }}
+          <break time="1s"/>
+          {{ if neq .Title "" }}
+            Bro, it's titled: {{.Title}}.
+          {{ end }}
+          <break time="1s"/>
+          {{.Message}}
+          <break time="1s"/>
+          That is all.
+          <break time="1s"/>
+          You know who this message is from? It is from {{.Sender}}.
+          <break time="3s"/>
+        </Say>
+        <Say>See ya!</Say>
+      </Response>
+    ```
+
+=== "Custom TwiML (German)"
+    ``` yaml
+    twilio-account: "AC12345beefbeef67890beefbeef122586"
+    twilio-auth-token: "affebeef258625862586258625862586"
+    twilio-phone-number: "+18775132586"
+    twilio-verify-service: "VA12345beefbeef67890beefbeef122586"
+    twilio-call-format: |
+      <Response>
+        <Pause length="1"/>
+        <Say loop="3" voice="alice" language="de-DE">
+          Du hast eine Nachricht zum Thema {{.Topic}}.
+          {{ if eq .Priority 5 }}
+            Achtung. Die Nachricht ist sehr wichtig.
+          {{ end }}
+          <break time="1s"/>
+          {{ if neq .Title "" }}
+            Titel der Nachricht: {{.Title}}.
+          {{ end }}
+          <break time="1s"/>
+          Nachricht:
+          <break time="1s"/>
+          {{.Message}}
+          <break time="1s"/>
+          Ende der Nachricht.
+          <break time="1s"/>
+          Diese Nachricht wurde vom Benutzer {{.Sender}} gesendet. Sie wird drei Mal wiederholt.
+          <break time="3s"/>
+        </Say>
+        <Say voice="alice" language="de-DE">Alla mol!</Say>
+      </Response>
+    ```
 
 ## Message limits
 There are a few message limits that you can configure:
@@ -1054,7 +1926,9 @@ per-visitor limits:
 * `visitor-attachment-total-size-limit` is the total storage limit used for attachments per visitor. It defaults to 100M.
   The per-visitor storage is automatically decreased as attachments expire. External attachments (attached via `X-Attach`, 
   see [publishing docs](publish.md#attachments)) do not count here. 
-* `visitor-attachment-daily-bandwidth-limit` is the total daily attachment download/upload bandwidth limit per visitor, 
+* `visitor-attachment-daily-bandwidth-limit` is the total daily bandwidth limit per visitor. It covers attachment
+  downloads/uploads, and messages replayed from the message cache by poll requests (a poll without a `since` cursor
+  returns a topic's entire cache, so a busy topic can be re-read for many times its own size), 
   including PUT and GET requests. This is to protect your precious bandwidth from abuse, since egress costs money in
   most cloud providers. This defaults to 500M.
 
@@ -1064,6 +1938,17 @@ are enabled):
 
 * `visitor-email-limit-burst` is the initial bucket of emails each visitor has. This defaults to 16.
 * `visitor-email-limit-replenish` is the rate at which the bucket is refilled (one email per x). Defaults to 1h.
+
+### Topic creation limits
+To mitigate topic-enumeration / squatting attacks (where a single source pokes thousands of guessable
+topic names to inflate the server's in-memory topic map), there is a per-visitor limit on how many *new*
+topics each visitor can cause to be created. Touching topics that already exist in memory does not consume
+a token; only first-time insertions do.
+
+* `visitor-topic-creation-limit-burst` is the initial bucket of new-topic tokens. Set to 0 to disable
+  the limit entirely. Defaults to 100.
+* `visitor-topic-creation-limit-replenish` is the rate at which the bucket is refilled (one new topic per x).
+  Defaults to 1m.
 
 ### Firebase limits
 If [Firebase is configured](#firebase-fcm), all messages are also published to a Firebase topic (unless `Firebase: no` 
@@ -1081,6 +1966,18 @@ If this ever happens, there will be a log message that looks something like this
 ```
 WARN Firebase quota exceeded (likely for topic), temporarily denying Firebase access to visitor
 ```
+
+### IPv6 considerations
+By default, rate limiting for IPv6 is done using the `/64` subnet of the visitor's IPv6 address. This means that all visitors
+in the same `/64` subnet are treated as one visitor. This is done to prevent abuse, as IPv6 subnet assignments are typically
+much larger than IPv4 subnets (and much cheaper), and it is common for ISPs to assign large subnets to their customers.
+
+Other than that, rate limiting for IPv6 is done the same way as for IPv4, using the visitor's IP address or subnet to identify them.
+
+There are two options to configure the number of bits used for rate limiting (for IPv4 and IPv6):
+
+- `visitor-prefix-bits-ipv4` is number of bits of the IPv4 address to use for rate limiting (default: 32, full address)
+- `visitor-prefix-bits-ipv6` is number of bits of the IPv6 address to use for rate limiting (default: 64, /64 subnet)
 
 ### Subscriber-based rate limiting
 By default, ntfy puts almost all rate limits on the message publisher, e.g. number of messages, requests, and attachment
@@ -1242,6 +2139,95 @@ and [here](https://easyengine.io/tutorials/nginx/block-wp-login-php-bruteforce-a
     maxretry = 10
     ```
 
+Note that if you run nginx in a container, append `, chain=DOCKER-USER` to the jail.local action. By default, the jail action chain
+is `INPUT`, but `FORWARD` is used when using docker networks. `DOCKER-USER`, available when using docker, is part of the `FORWARD`
+chain.
+
+The official ntfy.sh server uses fail2ban to ban IPs. Check out ntfy.sh's [Ansible fail2ban role](https://github.com/binwiederhier/ntfy-ansible/tree/main/roles/fail2ban) for details. Ban actors are banned for 1 hour initially, and up to
+4 hours at a time for repeated offenses. IPv4 addresses are banned individually, while IPv6 addresses are banned by their `/56` prefix.
+
+### Ban-feed
+In addition to the fail2ban setup above, ntfy can detect abusive visitors itself and write their IP
+addresses to a file for fail2ban to ban from. ntfy keeps a per-prefix weighted "strike" budget, and
+each rejected request costs strikes based on its response code -- the ntfy error code, or its HTTP
+status (see `ban-weights`) -- so different kinds of rejection can be weighted differently or exempted
+entirely. When a prefix exceeds the budget, ntfy appends the offending IP address to `ban-file`. Since
+every line is already a confirmed offender, the fail2ban jail can ban on first sight (`maxretry = 1`).
+
+- `ban-file` is the file offenders are appended to. If it is not set, the ban-feed is disabled. Its
+  parent directory must exist and be writable by ntfy. Be sure to rotate it (e.g. with logrotate and
+  `copytruncate`) so it does not grow unbounded.
+- `ban-window` is the rolling window over which weighted strikes are counted, per IP prefix.
+- `ban-threshold` is the number of weighted strikes per `ban-window` before a prefix is written to
+  `ban-file`. Each prefix has one shared budget, so it cannot be gamed by mixing error codes.
+- `ban-weights` assigns a strike weight per matcher key, formatted as `KEY:WEIGHT`. A key is an exact
+  ntfy error code (`42909`), a code family (`429*`, `403*`, `4*`), a bare HTTP status (`403`, short for
+  `403*`), or `*`. The longest matching key wins. A weight of `0` exempts a code entirely (it never
+  counts toward a ban), useful to spare a specific code from a `*` catch-all. Heavier weights ban faster. If you do not
+  include a `*` rule, any code that matches nothing defaults to weight `1` (i.e. it can be banned);
+  set `*:0` to exempt everything that is not explicitly weighted.
+
+Only rejections (4xx/5xx) count towards a ban; successful requests never do. Because the budget
+refills over `ban-window`, the trigger is a sustained rate: a prefix is only written out once it
+exceeds `ban-threshold / ban-window` rejections per second (with the defaults, `100 / 10m` = ~0.17/s).
+
+Each line in `ban-file` has the format `<RFC3339-timestamp> <ip> <prefix> <http-code> <ntfy-code>`, for example:
+
+```
+2026-01-15T20:56:32Z 1.2.3.4 1.2.3.4/32 429 42901
+2026-01-15T20:56:32Z 2001:db8::abcd 2001:db8::/64 429 42909
+```
+
+`<prefix>` is `<ip>` masked to the rate-limiting prefix (`visitor-prefix-bits-ipv4`/`-ipv6`) -- the
+same unit ntfy rate-limits by. Have the fail2ban filter capture the bare `<ip>` (the action then
+applies the prefix):
+
+=== "server.yml"
+    ```yaml
+    ban-file: "/var/log/ntfy/ban.log"
+    ban-window: "10m"
+    ban-threshold: 100
+    ban-weights:
+      - "42909:10"   # too many auth failures -> brute force, ban fast
+      # everything else 4xx/5xx defaults to weight 1
+    ```
+
+=== "/etc/fail2ban/filter.d/ntfy-ban.conf"
+    ```
+    [Definition]
+    failregex = ^\S+ <HOST> \S+ \d+ \d+$
+    datepattern = ^%%Y-%%m-%%dT%%H:%%M:%%S
+    ignoreregex =
+    ```
+
+=== "/etc/fail2ban/jail.d/ntfy-ban.local"
+    ```
+    [ntfy-ban]
+    enabled = true
+    filter = ntfy-ban
+    action = iptables-multiport[name=ntfy-ban, port="http,https", protocol=tcp]
+    logpath = /var/log/ntfy/ban.log
+    maxretry = 1
+    findtime = 1m
+    bantime = 1h
+    ```
+
+## IPv6 support
+ntfy fully supports IPv6, though there are a few things to keep in mind.
+
+- **Listening on an IPv6 address**: By default, ntfy listens on `:80` (IPv4-only). If you want to listen on an IPv6 address, you need to
+  explicitly set the `listen-http` and/or `listen-https` options in your `server.yml` file to an IPv6 address, e.g. `[::]:80`. To listen on
+  IPv4 and IPv6, you must run ntfy behind a reverse proxy, e.g. `listen :80; listen [::]:80;` in nginx.
+- **Rate limiting:** By default, ntfy uses the `/64` subnet of the visitor's IPv6 address for rate limiting. This means that all visitors in the same `/64`
+  subnet are treated as one visitor. If you want to change this, you can set the `visitor-prefix-bits-ipv6` option in your `server.yml` file to a different
+  value (e.g. `48` for `/48` subnets). See [IPv6 considerations](#ipv6-considerations) and [IP-based rate limiting](#ip-based-rate-limiting) for more details.
+- **Banning IPs with fail2ban:** By default, if you're using the `iptables-multiport` action, fail2ban bans individual IPv4 and IPv6 addresses via `iptables` and `ip6tables`. While this behavior is fine for IPv4, it is not for IPv6, because every host can technically have up to 2^64 addresses. Please ensure that your `actionban` and `actionunban` commands
+  support IPv6 and also ban the entire prefix (e.g. `/48`). See [Banning bad actors](#banning-bad-actors-fail2ban) for details.
+
+!!! info
+    The official ntfy.sh server supports IPv6. Check out ntfy.sh's [Ansible repository](https://github.com/binwiederhier/ntfy-ansible) for examples of how to
+    configure [ntfy](https://github.com/binwiederhier/ntfy-ansible/tree/main/roles/ntfy), [nginx](https://github.com/binwiederhier/ntfy-ansible/tree/main/roles/nginx) and [fail2ban](https://github.com/binwiederhier/ntfy-ansible/tree/main/roles/fail2ban).
+
 ## Health checks
 A preliminary health check API endpoint is exposed at `/v1/health`. The endpoint returns a `json` response in the format shown below.
 If a non-200 HTTP status code is returned or if the returned `healthy` field is `false` the ntfy service should be considered as unhealthy.
@@ -1256,13 +2242,14 @@ See [Installation for Docker](install.md#docker) for an example of how this coul
 If configured, ntfy can expose a `/metrics` endpoint for [Prometheus](https://prometheus.io/), which can then be used to
 create dashboards and alerts (e.g. via [Grafana](https://grafana.com/)).
 
-To configure the metrics endpoint, either set `enable-metrics` and/or set the `listen-metrics-http` option to a dedicated
+To configure the metrics endpoint, either set `enable-metrics`, or set the `metrics-listen-http` option to a dedicated
 listen address. Metrics may be considered sensitive information, so before you enable them, be sure you know what you are
 doing, and/or secure access to the endpoint in your reverse proxy.
 
 - `enable-metrics` enables the /metrics endpoint for the default ntfy server (i.e. HTTP, HTTPS and/or Unix socket)
-- `metrics-listen-http` exposes the metrics endpoint via a dedicated `[IP]:port`. If set, this option implicitly
-  enables metrics as well, e.g. "10.0.1.1:9090" or ":9090"
+- `metrics-listen-http` moves the metrics endpoint to a dedicated `[IP]:port`, e.g. "10.0.1.1:9090" or ":9090". It
+  implicitly enables metrics. If set, the metrics are served only on that dedicated port, and the default ntfy server
+  does not serve /metrics, even if `enable-metrics` is also set.
 
 === "server.yml (Using default port)"
     ```yaml
@@ -1365,68 +2352,93 @@ variable before running the `ntfy` command (e.g. `export NTFY_LISTEN_HTTP=:80`).
     `cache_duration` and `cache-duration` are both supported. This is to support stricter YAML parsers that do 
     not support dashes.
 
-| Config option                              | Env variable                                    | Format                                              | Default           | Description                                                                                                                                                                                                                     |
-|--------------------------------------------|-------------------------------------------------|-----------------------------------------------------|-------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `base-url`                                 | `NTFY_BASE_URL`                                 | *URL*                                               | -                 | Public facing base URL of the service (e.g. `https://ntfy.sh`)                                                                                                                                                                  |
-| `listen-http`                              | `NTFY_LISTEN_HTTP`                              | `[host]:port`                                       | `:80`             | Listen address for the HTTP web server                                                                                                                                                                                          |
-| `listen-https`                             | `NTFY_LISTEN_HTTPS`                             | `[host]:port`                                       | -                 | Listen address for the HTTPS web server. If set, you also need to set `key-file` and `cert-file`.                                                                                                                               |
-| `listen-unix`                              | `NTFY_LISTEN_UNIX`                              | *filename*                                          | -                 | Path to a Unix socket to listen on                                                                                                                                                                                              |
-| `listen-unix-mode`                         | `NTFY_LISTEN_UNIX_MODE`                         | *file mode*                                         | *system default*  | File mode of the Unix socket, e.g. 0700 or 0777                                                                                                                                                                                 |
-| `key-file`                                 | `NTFY_KEY_FILE`                                 | *filename*                                          | -                 | HTTPS/TLS private key file, only used if `listen-https` is set.                                                                                                                                                                 |
-| `cert-file`                                | `NTFY_CERT_FILE`                                | *filename*                                          | -                 | HTTPS/TLS certificate file, only used if `listen-https` is set.                                                                                                                                                                 |
-| `firebase-key-file`                        | `NTFY_FIREBASE_KEY_FILE`                        | *filename*                                          | -                 | If set, also publish messages to a Firebase Cloud Messaging (FCM) topic for your app. This is optional and only required to save battery when using the Android app. See [Firebase (FCM](#firebase-fcm).                        |
-| `cache-file`                               | `NTFY_CACHE_FILE`                               | *filename*                                          | -                 | If set, messages are cached in a local SQLite database instead of only in-memory. This allows for service restarts without losing messages in support of the since= parameter. See [message cache](#message-cache).             |
-| `cache-duration`                           | `NTFY_CACHE_DURATION`                           | *duration*                                          | 12h               | Duration for which messages will be buffered before they are deleted. This is required to support the `since=...` and `poll=1` parameter. Set this to `0` to disable the cache entirely.                                        |
-| `cache-startup-queries`                    | `NTFY_CACHE_STARTUP_QUERIES`                    | *string (SQL queries)*                              | -                 | SQL queries to run during database startup; this is useful for tuning and [enabling WAL mode](#wal-for-message-cache)                                                                                                           |
-| `cache-batch-size`                         | `NTFY_CACHE_BATCH_SIZE`                         | *int*                                               | 0                 | Max size of messages to batch together when writing to message cache (if zero, writes are synchronous)                                                                                                                          |
-| `cache-batch-timeout`                      | `NTFY_CACHE_BATCH_TIMEOUT`                      | *duration*                                          | 0s                | Timeout for batched async writes to the message cache (if zero, writes are synchronous)                                                                                                                                         |
-| `auth-file`                                | `NTFY_AUTH_FILE`                                | *filename*                                          | -                 | Auth database file used for access control. If set, enables authentication and access control. See [access control](#access-control).                                                                                           |
-| `auth-default-access`                      | `NTFY_AUTH_DEFAULT_ACCESS`                      | `read-write`, `read-only`, `write-only`, `deny-all` | `read-write`      | Default permissions if no matching entries in the auth database are found. Default is `read-write`.                                                                                                                             |
-| `behind-proxy`                             | `NTFY_BEHIND_PROXY`                             | *bool*                                              | false             | If set, the X-Forwarded-For header is used to determine the visitor IP address instead of the remote address of the connection.                                                                                                 |
-| `attachment-cache-dir`                     | `NTFY_ATTACHMENT_CACHE_DIR`                     | *directory*                                         | -                 | Cache directory for attached files. To enable attachments, this has to be set.                                                                                                                                                  |
-| `attachment-total-size-limit`              | `NTFY_ATTACHMENT_TOTAL_SIZE_LIMIT`              | *size*                                              | 5G                | Limit of the on-disk attachment cache directory. If the limits is exceeded, new attachments will be rejected.                                                                                                                   |
-| `attachment-file-size-limit`               | `NTFY_ATTACHMENT_FILE_SIZE_LIMIT`               | *size*                                              | 15M               | Per-file attachment size limit (e.g. 300k, 2M, 100M). Larger attachment will be rejected.                                                                                                                                       |
-| `attachment-expiry-duration`               | `NTFY_ATTACHMENT_EXPIRY_DURATION`               | *duration*                                          | 3h                | Duration after which uploaded attachments will be deleted (e.g. 3h, 20h). Strongly affects `visitor-attachment-total-size-limit`.                                                                                               |
-| `smtp-sender-addr`                         | `NTFY_SMTP_SENDER_ADDR`                         | `host:port`                                         | -                 | SMTP server address to allow email sending                                                                                                                                                                                      |
-| `smtp-sender-user`                         | `NTFY_SMTP_SENDER_USER`                         | *string*                                            | -                 | SMTP user; only used if e-mail sending is enabled                                                                                                                                                                               |
-| `smtp-sender-pass`                         | `NTFY_SMTP_SENDER_PASS`                         | *string*                                            | -                 | SMTP password; only used if e-mail sending is enabled                                                                                                                                                                           |
-| `smtp-sender-from`                         | `NTFY_SMTP_SENDER_FROM`                         | *e-mail address*                                    | -                 | SMTP sender e-mail address; only used if e-mail sending is enabled                                                                                                                                                              |
-| `smtp-server-listen`                       | `NTFY_SMTP_SERVER_LISTEN`                       | `[ip]:port`                                         | -                 | Defines the IP address and port the SMTP server will listen on, e.g. `:25` or `1.2.3.4:25`                                                                                                                                      |
-| `smtp-server-domain`                       | `NTFY_SMTP_SERVER_DOMAIN`                       | *domain name*                                       | -                 | SMTP server e-mail domain, e.g. `ntfy.sh`                                                                                                                                                                                       |
-| `smtp-server-addr-prefix`                  | `NTFY_SMTP_SERVER_ADDR_PREFIX`                  | *string*                                            | -                 | Optional prefix for the e-mail addresses to prevent spam, e.g. `ntfy-`                                                                                                                                                          |
-| `twilio-account`                           | `NTFY_TWILIO_ACCOUNT`                           | *string*                                            | -                 | Twilio account SID, e.g. AC12345beefbeef67890beefbeef122586                                                                                                                                                                     |
-| `twilio-auth-token`                        | `NTFY_TWILIO_AUTH_TOKEN`                        | *string*                                            | -                 | Twilio auth token, e.g. affebeef258625862586258625862586                                                                                                                                                                        |
-| `twilio-phone-number`                      | `NTFY_TWILIO_PHONE_NUMBER`                      | *string*                                            | -                 | Twilio outgoing phone number, e.g. +18775132586                                                                                                                                                                                 |
-| `twilio-verify-service`                    | `NTFY_TWILIO_VERIFY_SERVICE`                    | *string*                                            | -                 | Twilio Verify service SID, e.g. VA12345beefbeef67890beefbeef122586                                                                                                                                                              |
-| `keepalive-interval`                       | `NTFY_KEEPALIVE_INTERVAL`                       | *duration*                                          | 45s               | Interval in which keepalive messages are sent to the client. This is to prevent intermediaries closing the connection for inactivity. Note that the Android app has a hardcoded timeout at 77s, so it should be less than that. |
-| `manager-interval`                         | `NTFY_MANAGER_INTERVAL`                         | *duration*                                          | 1m                | Interval in which the manager prunes old messages, deletes topics and prints the stats.                                                                                                                                         |
-| `message-size-limit`                       | `NTFY_MESSAGE_SIZE_LIMIT`                       | *size*                                              | 4K                | The size limit for the message body. Please note that this is largely untested, and that FCM/APNS have limits around 4KB. If you increase this size limit, FCM and APNS will NOT work for large messages.                       |
-| `message-delay-limit`                      | `NTFY_MESSAGE_DELAY_LIMIT`                      | *duration*                                          | 3d                | Amount of time a message can be [scheduled](publish.md#scheduled-delivery) into the future when using the `Delay` header                                                                                                        |
-| `global-topic-limit`                       | `NTFY_GLOBAL_TOPIC_LIMIT`                       | *number*                                            | 15,000            | Rate limiting: Total number of topics before the server rejects new topics.                                                                                                                                                     |
-| `upstream-base-url`                        | `NTFY_UPSTREAM_BASE_URL`                        | *URL*                                               | `https://ntfy.sh` | Forward poll request to an upstream server, this is needed for iOS push notifications for self-hosted servers                                                                                                                   |
-| `upstream-access-token`                    | `NTFY_UPSTREAM_ACCESS_TOKEN`                    | *string*                                            | `tk_zyYLYj...`    | Access token to use for the upstream server; needed only if upstream rate limits are exceeded or upstream server requires auth                                                                                                  |
-| `visitor-attachment-total-size-limit`      | `NTFY_VISITOR_ATTACHMENT_TOTAL_SIZE_LIMIT`      | *size*                                              | 100M              | Rate limiting: Total storage limit used for attachments per visitor, for all attachments combined. Storage is freed after attachments expire. See `attachment-expiry-duration`.                                                 |
-| `visitor-attachment-daily-bandwidth-limit` | `NTFY_VISITOR_ATTACHMENT_DAILY_BANDWIDTH_LIMIT` | *size*                                              | 500M              | Rate limiting: Total daily attachment download/upload traffic limit per visitor. This is to protect your bandwidth costs from exploding.                                                                                        |
-| `visitor-email-limit-burst`                | `NTFY_VISITOR_EMAIL_LIMIT_BURST`                | *number*                                            | 16                | Rate limiting:Initial limit of e-mails per visitor                                                                                                                                                                              |
-| `visitor-email-limit-replenish`            | `NTFY_VISITOR_EMAIL_LIMIT_REPLENISH`            | *duration*                                          | 1h                | Rate limiting: Strongly related to `visitor-email-limit-burst`: The rate at which the bucket is refilled                                                                                                                        |
-| `visitor-message-daily-limit`              | `NTFY_VISITOR_MESSAGE_DAILY_LIMIT`              | *number*                                            | -                 | Rate limiting: Allowed number of messages per day per visitor, reset every day at midnight (UTC). By default, this value is unset.                                                                                              |
-| `visitor-request-limit-burst`              | `NTFY_VISITOR_REQUEST_LIMIT_BURST`              | *number*                                            | 60                | Rate limiting: Allowed GET/PUT/POST requests per second, per visitor. This setting is the initial bucket of requests each visitor has                                                                                           |
-| `visitor-request-limit-replenish`          | `NTFY_VISITOR_REQUEST_LIMIT_REPLENISH`          | *duration*                                          | 5s                | Rate limiting: Strongly related to `visitor-request-limit-burst`: The rate at which the bucket is refilled                                                                                                                      |
-| `visitor-request-limit-exempt-hosts`       | `NTFY_VISITOR_REQUEST_LIMIT_EXEMPT_HOSTS`       | *comma-separated host/IP list*                      | -                 | Rate limiting: List of hostnames and IPs to be exempt from request rate limiting                                                                                                                                                |
-| `visitor-subscription-limit`               | `NTFY_VISITOR_SUBSCRIPTION_LIMIT`               | *number*                                            | 30                | Rate limiting: Number of subscriptions per visitor (IP address)                                                                                                                                                                 |
-| `visitor-subscriber-rate-limiting`         | `NTFY_VISITOR_SUBSCRIBER_RATE_LIMITING`         | *bool*                                              | `false`           | Rate limiting: Enables subscriber-based rate limiting                                                                                                                                                                           |
-| `web-root`                                 | `NTFY_WEB_ROOT`                                 | *path*, e.g. `/` or `/app`, or `disable`            | `/`               | Sets root of the web app (e.g. /, or /app), or disables it entirely (disable)                                                                                                                                                   |
-| `enable-signup`                            | `NTFY_ENABLE_SIGNUP`                            | *boolean* (`true` or `false`)                       | `false`           | Allows users to sign up via the web app, or API                                                                                                                                                                                 |
-| `enable-login`                             | `NTFY_ENABLE_LOGIN`                             | *boolean* (`true` or `false`)                       | `false`           | Allows users to log in via the web app, or API                                                                                                                                                                                  |
-| `enable-reservations`                      | `NTFY_ENABLE_RESERVATIONS`                      | *boolean* (`true` or `false`)                       | `false`           | Allows users to reserve topics (if their tier allows it)                                                                                                                                                                        |
-| `stripe-secret-key`                        | `NTFY_STRIPE_SECRET_KEY`                        | *string*                                            | -                 | Payments: Key used for the Stripe API communication, this enables payments                                                                                                                                                      |
-| `stripe-webhook-key`                       | `NTFY_STRIPE_WEBHOOK_KEY`                       | *string*                                            | -                 | Payments: Key required to validate the authenticity of incoming webhooks from Stripe                                                                                                                                            |
-| `billing-contact`                          | `NTFY_BILLING_CONTACT`                          | *email address* or *website*                        | -                 | Payments: Email or website displayed in Upgrade dialog as a billing contact                                                                                                                                                     |
-| `web-push-public-key`                      | `NTFY_WEB_PUSH_PUBLIC_KEY`                      | *string*                                            | -                 | Web Push: Public Key. Run `ntfy webpush keys` to generate                                                                                                                                                                       |
-| `web-push-private-key`                     | `NTFY_WEB_PUSH_PRIVATE_KEY`                     | *string*                                            | -                 | Web Push: Private Key. Run `ntfy webpush keys` to generate                                                                                                                                                                      |
-| `web-push-file`                            | `NTFY_WEB_PUSH_FILE`                            | *string*                                            | -                 | Web Push: Database file that stores subscriptions                                                                                                                                                                               |
-| `web-push-email-address`                   | `NTFY_WEB_PUSH_EMAIL_ADDRESS`                   | *string*                                            | -                 | Web Push: Sender email address                                                                                                                                                                                                  |
-| `web-push-startup-queries`                 | `NTFY_WEB_PUSH_STARTUP_QUERIES`                 | *string*                                            | -                 | Web Push: SQL queries to run against subscription database at startup                                                                                                                                                           |
+| Config option                              | Env variable                                    | Format                                              | Default           | Description                                                                                                                                                                                                                             |
+|--------------------------------------------|-------------------------------------------------|-----------------------------------------------------|-------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `base-url`                                 | `NTFY_BASE_URL`                                 | *URL*                                               | -                 | Public facing base URL of the service (e.g. `https://ntfy.sh`)                                                                                                                                                                          |
+| `listen-http`                              | `NTFY_LISTEN_HTTP`                              | `[host]:port`                                       | `:80`             | Listen address for the HTTP web server                                                                                                                                                                                                  |
+| `listen-https`                             | `NTFY_LISTEN_HTTPS`                             | `[host]:port`                                       | -                 | Listen address for the HTTPS web server. If set, you also need to set `key-file` and `cert-file`.                                                                                                                                       |
+| `listen-unix`                              | `NTFY_LISTEN_UNIX`                              | *filename*                                          | -                 | Path to a Unix socket to listen on                                                                                                                                                                                                      |
+| `listen-unix-mode`                         | `NTFY_LISTEN_UNIX_MODE`                         | *file mode*                                         | *system default*  | File mode of the Unix socket, e.g. 0700 or 0777                                                                                                                                                                                         |
+| `key-file`                                 | `NTFY_KEY_FILE`                                 | *filename*                                          | -                 | HTTPS/TLS private key file, only used if `listen-https` is set.                                                                                                                                                                         |
+| `cert-file`                                | `NTFY_CERT_FILE`                                | *filename*                                          | -                 | HTTPS/TLS certificate file, only used if `listen-https` is set.                                                                                                                                                                         |
+| `firebase-key-file`                        | `NTFY_FIREBASE_KEY_FILE`                        | *filename*                                          | -                 | If set, also publish messages to a Firebase Cloud Messaging (FCM) topic for your app. This is optional and only required to save battery when using the Android app. See [Firebase (FCM)](#firebase-fcm).                               |
+| `database-url`                             | `NTFY_DATABASE_URL`                             | *string (connection URL)*                           | -                 | PostgreSQL connection string (e.g. `postgres://user:pass@host:5432/ntfy`). If set, uses PostgreSQL for all database-backed stores (message cache, user manager, web push) instead of SQLite. See [database options](#database-options). |
+| `experimental-cluster-node-id`             | `NTFY_EXPERIMENTAL_CLUSTER_NODE_ID`             | *string*                                            | -                 | Experimental, not ready for production. Stable per-node identifier (e.g. the hostname).                                                                                                                                                 |
+| `experimental-cluster-listen`              | `NTFY_EXPERIMENTAL_CLUSTER_LISTEN`              | `[host]:port`                                       | -                 | Experimental, not ready for production. Private listen address for node-to-node traffic; setting it enables clustering (requires `database-url`).                                                                                        |
+| `experimental-cluster-advertise-url`       | `NTFY_EXPERIMENTAL_CLUSTER_ADVERTISE_URL`       | *URL*                                               | `http://<experimental-cluster-listen>` | Experimental, not ready for production. URL under which other nodes reach this node's cluster listener.                                                                                             |
+| `experimental-cluster-secret`              | `NTFY_EXPERIMENTAL_CLUSTER_SECRET`              | *string*                                            | -                 | Experimental, not ready for production. Shared secret authenticating node-to-node traffic; must match on all nodes.                                                                                                                      |
+| `experimental-cluster-batch-linger`        | `NTFY_EXPERIMENTAL_CLUSTER_BATCH_LINGER`        | *duration*                                          | `500ms`           | Experimental, not ready for production. How long messages wait to form a node-to-node delivery batch; `0` sends immediately.                                                                                                             |
+| `database-replica-urls`                    | `NTFY_DATABASE_REPLICA_URLS`                    | *list of strings (connection URLs)*                 | -                 | PostgreSQL read replica connection strings. Non-critical read-only queries are distributed across replicas (round-robin) with automatic fallback to primary. Requires `database-url`.                                                   |
+| `cache-file`                               | `NTFY_CACHE_FILE`                               | *filename*                                          | -                 | If set, messages are cached in a local SQLite database instead of only in-memory. This allows for service restarts without losing messages in support of the since= parameter. See [message cache](#message-cache).                     |
+| `cache-duration`                           | `NTFY_CACHE_DURATION`                           | *duration*                                          | 12h               | Duration for which messages will be buffered before they are deleted. This is required to support the `since=...` and `poll=1` parameter. Set this to `0` to disable the cache entirely.                                                |
+| `cache-startup-queries`                    | `NTFY_CACHE_STARTUP_QUERIES`                    | *string (SQL queries)*                              | -                 | SQL queries to run during database startup; this is useful for tuning and [enabling WAL mode](#message-cache)                                                                                                                           |
+| `cache-batch-size`                         | `NTFY_CACHE_BATCH_SIZE`                         | *int*                                               | 0                 | Max size of messages to batch together when writing to message cache (if zero, writes are synchronous)                                                                                                                                  |
+| `cache-batch-timeout`                      | `NTFY_CACHE_BATCH_TIMEOUT`                      | *duration*                                          | 0s                | Timeout for batched async writes to the message cache (if zero, writes are synchronous)                                                                                                                                                 |
+| `auth-file`                                | `NTFY_AUTH_FILE`                                | *filename*                                          | -                 | Auth database file used for access control (SQLite). If set, enables authentication and access control. Not required if `database-url` is set. See [access control](#access-control).                                                   |
+| `auth-default-access`                      | `NTFY_AUTH_DEFAULT_ACCESS`                      | `read-write`, `read-only`, `write-only`, `deny-all` | `read-write`      | Default permissions if no matching entries in the auth database are found. Default is `read-write`.                                                                                                                                     |
+| `auth-access-cache`                        | `NTFY_AUTH_ACCESS_CACHE`                        | *bool*                                              | false             | Enables an in-memory ACL cache so authorization checks no longer hit the database. Only worth enabling on high-volume servers.                                                                                                          |
+| `behind-proxy`                             | `NTFY_BEHIND_PROXY`                             | *bool*                                              | false             | If set, use forwarded header (e.g. X-Forwarded-For, X-Client-IP) to determine visitor IP address (for rate limiting)                                                                                                                    |
+| `proxy-forwarded-header`                   | `NTFY_PROXY_FORWARDED_HEADER`                   | *string*                                            | `X-Forwarded-For` | Use specified header to determine visitor IP address (for rate limiting)                                                                                                                                                                |
+| `proxy-trusted-hosts`                      | `NTFY_PROXY_TRUSTED_HOSTS`                      | *comma-separated host/IP/CIDR list*                 | -                 | Comma-separated list of trusted IP addresses, hosts, or CIDRs to remove from forwarded header                                                                                                                                           |
+| `attachment-cache-dir`                     | `NTFY_ATTACHMENT_CACHE_DIR`                     | *directory or S3 URL*                               | -                 | Cache directory for attached files, or S3 URL for object storage (format: `s3://KEY:SECRET@BUCKET[/PREFIX]?region=REGION[&endpoint=ENDPOINT][&disable_http2=true]`).                                                                    |
+| `attachment-total-size-limit`              | `NTFY_ATTACHMENT_TOTAL_SIZE_LIMIT`              | *size*                                              | 5G                | Limit of the on-disk attachment cache directory. If the limits is exceeded, new attachments will be rejected.                                                                                                                           |
+| `attachment-file-size-limit`               | `NTFY_ATTACHMENT_FILE_SIZE_LIMIT`               | *size*                                              | 15M               | Per-file attachment size limit (e.g. 300k, 2M, 100M). Larger attachment will be rejected.                                                                                                                                               |
+| `attachment-expiry-duration`               | `NTFY_ATTACHMENT_EXPIRY_DURATION`               | *duration*                                          | 3h                | Duration after which uploaded attachments will be deleted (e.g. 3h, 20h). Capped at `cache-duration`. Strongly affects `visitor-attachment-total-size-limit`.                                                                                                       |
+| `smtp-sender-addr`                         | `NTFY_SMTP_SENDER_ADDR`                         | `host:port`                                         | -                 | SMTP server address to allow email sending                                                                                                                                                                                              |
+| `smtp-sender-user`                         | `NTFY_SMTP_SENDER_USER`                         | *string*                                            | -                 | SMTP user; only used if e-mail sending is enabled                                                                                                                                                                                       |
+| `smtp-sender-pass`                         | `NTFY_SMTP_SENDER_PASS`                         | *string*                                            | -                 | SMTP password; only used if e-mail sending is enabled                                                                                                                                                                                   |
+| `smtp-sender-from`                         | `NTFY_SMTP_SENDER_FROM`                         | *e-mail address*                                    | -                 | SMTP sender e-mail address; only used if e-mail sending is enabled                                                                                                                                                                      |
+| `smtp-sender-verify`                       | `NTFY_SMTP_SENDER_VERIFY`                       | *bool*                                              | `false`           | If true, require verified email addresses for email notifications; anonymous email sending is disabled                                                                                                                                  |
+| `smtp-server-listen`                       | `NTFY_SMTP_SERVER_LISTEN`                       | `[ip]:port`                                         | -                 | Defines the IP address and port the SMTP server will listen on, e.g. `:25` or `1.2.3.4:25`                                                                                                                                              |
+| `smtp-server-domain`                       | `NTFY_SMTP_SERVER_DOMAIN`                       | *domain name*                                       | -                 | SMTP server e-mail domain, e.g. `ntfy.sh`                                                                                                                                                                                               |
+| `smtp-server-addr-prefix`                  | `NTFY_SMTP_SERVER_ADDR_PREFIX`                  | *string*                                            | -                 | Optional prefix for the e-mail addresses to prevent spam, e.g. `ntfy-`                                                                                                                                                                  |
+| `twilio-account`                           | `NTFY_TWILIO_ACCOUNT`                           | *string*                                            | -                 | Twilio account SID, e.g. AC12345beefbeef67890beefbeef122586                                                                                                                                                                             |
+| `twilio-auth-token`                        | `NTFY_TWILIO_AUTH_TOKEN`                        | *string*                                            | -                 | Twilio auth token, e.g. affebeef258625862586258625862586                                                                                                                                                                                |
+| `twilio-phone-number`                      | `NTFY_TWILIO_PHONE_NUMBER`                      | *string*                                            | -                 | Twilio outgoing phone number, e.g. +18775132586                                                                                                                                                                                         |
+| `twilio-verify-service`                    | `NTFY_TWILIO_VERIFY_SERVICE`                    | *string*                                            | -                 | Twilio Verify service SID, e.g. VA12345beefbeef67890beefbeef122586                                                                                                                                                                      |
+| `keepalive-interval`                       | `NTFY_KEEPALIVE_INTERVAL`                       | *duration*                                          | 45s               | Interval in which keepalive messages are sent to the client. This is to prevent intermediaries closing the connection for inactivity. Note that the Android app has a hardcoded timeout at 77s, so it should be less than that.         |
+| `manager-interval`                         | `NTFY_MANAGER_INTERVAL`                         | *duration*                                          | 1m                | Interval in which the manager prunes old messages, deletes topics and prints the stats.                                                                                                                                                 |
+| `message-size-limit`                       | `NTFY_MESSAGE_SIZE_LIMIT`                       | *size*                                              | 4K                | The size limit for the message body. Please note that this is largely untested, and that FCM/APNS have limits around 4KB. If you increase this size limit, FCM and APNS will NOT work for large messages.                               |
+| `message-delay-limit`                      | `NTFY_MESSAGE_DELAY_LIMIT`                      | *duration*                                          | 3d                | Amount of time a message can be [scheduled](publish.md#scheduled-delivery) into the future when using the `Delay` header                                                                                                                |
+| `global-topic-limit`                       | `NTFY_GLOBAL_TOPIC_LIMIT`                       | *number*                                            | 15,000            | Rate limiting: Total number of topics before the server rejects new topics.                                                                                                                                                             |
+| `upstream-base-url`                        | `NTFY_UPSTREAM_BASE_URL`                        | *URL*                                               | `https://ntfy.sh` | Forward poll request to an upstream server, this is needed for iOS push notifications for self-hosted servers                                                                                                                           |
+| `upstream-access-token`                    | `NTFY_UPSTREAM_ACCESS_TOKEN`                    | *string*                                            | `tk_zyYLYj...`    | Access token to use for the upstream server; needed only if upstream rate limits are exceeded or upstream server requires auth                                                                                                          |
+| `visitor-attachment-total-size-limit`      | `NTFY_VISITOR_ATTACHMENT_TOTAL_SIZE_LIMIT`      | *size*                                              | 100M              | Rate limiting: Total storage limit used for attachments per visitor, for all attachments combined. Storage is freed after attachments expire. See `attachment-expiry-duration`.                                                         |
+| `visitor-attachment-daily-bandwidth-limit` | `NTFY_VISITOR_ATTACHMENT_DAILY_BANDWIDTH_LIMIT` | *size*                                              | 500M              | Rate limiting: Total daily traffic limit per visitor, covering attachment downloads/uploads and messages replayed from the cache by poll requests. This is to protect your bandwidth costs from exploding.                              |
+| `visitor-email-limit-burst`                | `NTFY_VISITOR_EMAIL_LIMIT_BURST`                | *number*                                            | 16                | Rate limiting:Initial limit of e-mails per visitor                                                                                                                                                                                      |
+| `visitor-email-limit-replenish`            | `NTFY_VISITOR_EMAIL_LIMIT_REPLENISH`            | *duration*                                          | 1h                | Rate limiting: Strongly related to `visitor-email-limit-burst`: The rate at which the bucket is refilled                                                                                                                                |
+| `visitor-message-daily-limit`              | `NTFY_VISITOR_MESSAGE_DAILY_LIMIT`              | *number*                                            | -                 | Rate limiting: Allowed number of messages per day per visitor, reset every day at midnight (UTC). By default, this value is unset.                                                                                                      |
+| `visitor-request-limit-burst`              | `NTFY_VISITOR_REQUEST_LIMIT_BURST`              | *number*                                            | 60                | Rate limiting: Allowed GET/PUT/POST requests per second, per visitor. This setting is the initial bucket of requests each visitor has                                                                                                   |
+| `visitor-request-limit-replenish`          | `NTFY_VISITOR_REQUEST_LIMIT_REPLENISH`          | *duration*                                          | 5s                | Rate limiting: Strongly related to `visitor-request-limit-burst`: The rate at which the bucket is refilled                                                                                                                              |
+| `visitor-request-limit-exempt-hosts`       | `NTFY_VISITOR_REQUEST_LIMIT_EXEMPT_HOSTS`       | *comma-separated host/IP/CIDR list*                 | -                 | Rate limiting: List of hostnames and IPs to be exempt from request rate limiting                                                                                                                                                        |
+| `visitor-subscription-limit`               | `NTFY_VISITOR_SUBSCRIPTION_LIMIT`               | *number*                                            | 30                | Rate limiting: Number of subscriptions per visitor (IP address)                                                                                                                                                                         |
+| `visitor-subscriber-rate-limiting`         | `NTFY_VISITOR_SUBSCRIBER_RATE_LIMITING`         | *bool*                                              | `false`           | Rate limiting: Enables subscriber-based rate limiting                                                                                                                                                                                   |
+| `visitor-topic-creation-limit-burst`       | `NTFY_VISITOR_TOPIC_CREATION_LIMIT_BURST`       | *number*                                            | 100               | Rate limiting: Initial bucket of new topic creations per visitor. 0 disables the limit.                                                                                                                                                 |
+| `visitor-topic-creation-limit-replenish`   | `NTFY_VISITOR_TOPIC_CREATION_LIMIT_REPLENISH`   | *duration*                                          | 1m                | Rate limiting: Rate at which the per-visitor topic-creation bucket is refilled (one new topic per x).                                                                                                                                   |
+| `visitor-prefix-bits-ipv4`                 | `NTFY_VISITOR_PREFIX_BITS_IPV4`                 | *number*                                            | 32                | Rate limiting: Number of bits to use for IPv4 visitor prefix, e.g. 24 for /24                                                                                                                                                           |
+| `visitor-prefix-bits-ipv6`                 | `NTFY_VISITOR_PREFIX_BITS_IPV6`                 | *number*                                            | 64                | Rate limiting: Number of bits to use for IPv6 visitor prefix, e.g. 48 for /48                                                                                                                                                           |
+| `ban-file`                                 | `NTFY_BAN_FILE`                                 | *filename*                                          | -                 | Abuse ban-feed: file confirmed abusive visitor IPs are appended to, for fail2ban to tail. Empty disables the feature. See [Banning bad actors](#banning-bad-actors-fail2ban)                                                             |
+| `ban-window`                               | `NTFY_BAN_WINDOW`                               | *duration*                                          | 10m               | Abuse ban-feed: rolling window over which weighted strikes are counted, per IP prefix                                                                                                                                                     |
+| `ban-threshold`                            | `NTFY_BAN_THRESHOLD`                            | *number*                                            | 100               | Abuse ban-feed: weighted strikes per `ban-window` before a prefix is written to `ban-file`                                                                                                                                             |
+| `ban-weights`                              | `NTFY_BAN_WEIGHTS`                              | *list of KEY:WEIGHT*                                | `42909:10`| Abuse ban-feed: per-code strike weights (exact code, family `429*`, or `*`; longest match wins; `0` exempts). See [Banning bad actors](#banning-bad-actors-fail2ban)                                                                     |
+| `web-root`                                 | `NTFY_WEB_ROOT`                                 | *path*, e.g. `/` or `/app`, or `disable`            | `/`               | Sets root of the web app (e.g. /, or /app), or disables it entirely (disable)                                                                                                                                                           |
+| `enable-signup`                            | `NTFY_ENABLE_SIGNUP`                            | *boolean* (`true` or `false`)                       | `false`           | Allows users to sign up via the web app, or API                                                                                                                                                                                         |
+| `enable-login`                             | `NTFY_ENABLE_LOGIN`                             | *boolean* (`true` or `false`)                       | `false`           | Allows users to log in via the web app, or API                                                                                                                                                                                          |
+| `enable-reservations`                      | `NTFY_ENABLE_RESERVATIONS`                      | *boolean* (`true` or `false`)                       | `false`           | Allows users to reserve topics (if their tier allows it)                                                                                                                                                                                |
+| `require-login`                            | `NTFY_REQUIRE_LOGIN`                            | *boolean* (`true` or `false`)                       | `false`           | All actions via the web app require a login                                                                                                                                                                                             |
+| `stripe-secret-key`                        | `NTFY_STRIPE_SECRET_KEY`                        | *string*                                            | -                 | Payments: Key used for the Stripe API communication, this enables payments                                                                                                                                                              |
+| `stripe-webhook-key`                       | `NTFY_STRIPE_WEBHOOK_KEY`                       | *string*                                            | -                 | Payments: Key required to validate the authenticity of incoming webhooks from Stripe                                                                                                                                                    |
+| `billing-contact`                          | `NTFY_BILLING_CONTACT`                          | *email address* or *website*                        | -                 | Payments: Email or website displayed in Upgrade dialog as a billing contact                                                                                                                                                             |
+| `web-push-public-key`                      | `NTFY_WEB_PUSH_PUBLIC_KEY`                      | *string*                                            | -                 | Web Push: Public Key. Run `ntfy webpush keys` to generate                                                                                                                                                                               |
+| `web-push-private-key`                     | `NTFY_WEB_PUSH_PRIVATE_KEY`                     | *string*                                            | -                 | Web Push: Private Key. Run `ntfy webpush keys` to generate                                                                                                                                                                              |
+| `web-push-file`                            | `NTFY_WEB_PUSH_FILE`                            | *string*                                            | -                 | Web Push: Database file that stores subscriptions                                                                                                                                                                                       |
+| `web-push-email-address`                   | `NTFY_WEB_PUSH_EMAIL_ADDRESS`                   | *string*                                            | -                 | Web Push: Sender email address                                                                                                                                                                                                          |
+| `web-push-startup-queries`                 | `NTFY_WEB_PUSH_STARTUP_QUERIES`                 | *string*                                            | -                 | Web Push: SQL queries to run against subscription database at startup                                                                                                                                                                   |
+| `web-push-expiry-duration`                 | `NTFY_WEB_PUSH_EXPIRY_DURATION`                 | *duration*                                          | 60d               | Web Push: Duration after which a subscription is considered stale and will be deleted. This is to prevent stale subscriptions.                                                                                                          |
+| `web-push-expiry-warning-duration`         | `NTFY_WEB_PUSH_EXPIRY_WARNING_DURATION`         | *duration*                                          | 55d               | Web Push: Duration after which a warning is sent to subscribers that their subscription will expire soon. This is to prevent stale subscriptions.                                                                                       |
+| `log-format`                               | `NTFY_LOG_FORMAT`                               | *string*                                            | `text`            | Defines the output format, can be text or json                                                                                                                                                                                          |
+| `log-file`                                 | `NTFY_LOG_FILE`                                 | *string*                                            | -                 | Defines the filename to write logs to. If this is not set, ntfy logs to stderr                                                                                                                                                          |
+| `log-level`                                | `NTFY_LOG_LEVEL`                                | *string*                                            | `info`            | Defines the default log level, can be one of trace, debug, info, warn or error                                                                                                                                                          |
 
 The format for a *duration* is: `<number>(smhd)`, e.g. 30s, 20m, 1h or 3d.   
 The format for a *size* is: `<number>(GMK)`, e.g. 1G, 200M or 4000k.
@@ -1477,7 +2489,8 @@ OPTIONS:
    --auth-file value, --auth_file value, -H value                                                                         auth database file used for access control [$NTFY_AUTH_FILE]
    --auth-startup-queries value, --auth_startup_queries value                                                             queries run when the auth database is initialized [$NTFY_AUTH_STARTUP_QUERIES]
    --auth-default-access value, --auth_default_access value, -p value                                                     default permissions if no matching entries in the auth database are found (default: "read-write") [$NTFY_AUTH_DEFAULT_ACCESS]
-   --attachment-cache-dir value, --attachment_cache_dir value                                                             cache directory for attached files [$NTFY_ATTACHMENT_CACHE_DIR]
+   --auth-access-cache, --auth_access_cache                                                                                enables the in-memory ACL cache (high-volume servers only) (default: false) [$NTFY_AUTH_ACCESS_CACHE]
+   --attachment-cache-dir value, --attachment_cache_dir value                                                             cache directory for attached files, or S3 URL (s3://ACCESS_KEY:SECRET_KEY@BUCKET[/PREFIX]?region=REGION[&endpoint=ENDPOINT][&disable_http2=true]) [$NTFY_ATTACHMENT_CACHE_DIR]
    --attachment-total-size-limit value, --attachment_total_size_limit value, -A value                                     limit of the on-disk attachment cache (default: "5G") [$NTFY_ATTACHMENT_TOTAL_SIZE_LIMIT]
    --attachment-file-size-limit value, --attachment_file_size_limit value, -Y value                                       per-file attachment size limit (e.g. 300k, 2M, 100M) (default: "15M") [$NTFY_ATTACHMENT_FILE_SIZE_LIMIT]
    --attachment-expiry-duration value, --attachment_expiry_duration value, -X value                                       duration after which uploaded attachments will be deleted (e.g. 3h, 20h) (default: "3h") [$NTFY_ATTACHMENT_EXPIRY_DURATION]
@@ -1505,16 +2518,22 @@ OPTIONS:
    --message-delay-limit value, --message_delay_limit value                                                               max duration a message can be scheduled into the future (default: "3d") [$NTFY_MESSAGE_DELAY_LIMIT]
    --global-topic-limit value, --global_topic_limit value, -T value                                                       total number of topics allowed (default: 15000) [$NTFY_GLOBAL_TOPIC_LIMIT]
    --visitor-subscription-limit value, --visitor_subscription_limit value                                                 number of subscriptions per visitor (default: 30) [$NTFY_VISITOR_SUBSCRIPTION_LIMIT]
+   --visitor-subscriber-rate-limiting, --visitor_subscriber_rate_limiting                                                 enables subscriber-based rate limiting (default: false) [$NTFY_VISITOR_SUBSCRIBER_RATE_LIMITING]
    --visitor-attachment-total-size-limit value, --visitor_attachment_total_size_limit value                               total storage limit used for attachments per visitor (default: "100M") [$NTFY_VISITOR_ATTACHMENT_TOTAL_SIZE_LIMIT]
-   --visitor-attachment-daily-bandwidth-limit value, --visitor_attachment_daily_bandwidth_limit value                     total daily attachment download/upload bandwidth limit per visitor (default: "500M") [$NTFY_VISITOR_ATTACHMENT_DAILY_BANDWIDTH_LIMIT]
+   --visitor-attachment-daily-bandwidth-limit value, --visitor_attachment_daily_bandwidth_limit value                     total daily bandwidth limit per visitor, for attachment downloads/uploads and messages replayed from the cache by poll requests (default: "500M") [$NTFY_VISITOR_ATTACHMENT_DAILY_BANDWIDTH_LIMIT]
    --visitor-request-limit-burst value, --visitor_request_limit_burst value                                               initial limit of requests per visitor (default: 60) [$NTFY_VISITOR_REQUEST_LIMIT_BURST]
    --visitor-request-limit-replenish value, --visitor_request_limit_replenish value                                       interval at which burst limit is replenished (one per x) (default: "5s") [$NTFY_VISITOR_REQUEST_LIMIT_REPLENISH]
    --visitor-request-limit-exempt-hosts value, --visitor_request_limit_exempt_hosts value                                 hostnames and/or IP addresses of hosts that will be exempt from the visitor request limit [$NTFY_VISITOR_REQUEST_LIMIT_EXEMPT_HOSTS]
    --visitor-message-daily-limit value, --visitor_message_daily_limit value                                               max messages per visitor per day, derived from request limit if unset (default: 0) [$NTFY_VISITOR_MESSAGE_DAILY_LIMIT]
    --visitor-email-limit-burst value, --visitor_email_limit_burst value                                                   initial limit of e-mails per visitor (default: 16) [$NTFY_VISITOR_EMAIL_LIMIT_BURST]
    --visitor-email-limit-replenish value, --visitor_email_limit_replenish value                                           interval at which burst limit is replenished (one per x) (default: "1h") [$NTFY_VISITOR_EMAIL_LIMIT_REPLENISH]
-   --visitor-subscriber-rate-limiting, --visitor_subscriber_rate_limiting                                                 enables subscriber-based rate limiting (default: false) [$NTFY_VISITOR_SUBSCRIBER_RATE_LIMITING]
-   --behind-proxy, --behind_proxy, -P                                                                                     if set, use X-Forwarded-For header to determine visitor IP address (for rate limiting) (default: false) [$NTFY_BEHIND_PROXY]
+   --visitor-topic-creation-limit-burst value, --visitor_topic_creation_limit_burst value                                 burst of new topic creations per visitor (0 = disabled) (default: 100) [$NTFY_VISITOR_TOPIC_CREATION_LIMIT_BURST]
+   --visitor-topic-creation-limit-replenish value, --visitor_topic_creation_limit_replenish value                         interval at which topic-creation tokens are refilled (one per x) (default: "1m") [$NTFY_VISITOR_TOPIC_CREATION_LIMIT_REPLENISH]
+   --visitor-prefix-bits-ipv4 value, --visitor_prefix_bits_ipv4 value                                                     number of bits of the IPv4 address to use for rate limiting (default: 32, full address) (default: 32) [$NTFY_VISITOR_PREFIX_BITS_IPV4]
+   --visitor-prefix-bits-ipv6 value, --visitor_prefix_bits_ipv6 value                                                     number of bits of the IPv6 address to use for rate limiting (default: 64, /64 subnet) (default: 64) [$NTFY_VISITOR_PREFIX_BITS_IPV6]
+   --behind-proxy, --behind_proxy, -P                                                                                     if set, use forwarded header (e.g. X-Forwarded-For, X-Client-IP) to determine visitor IP address (for rate limiting) (default: false) [$NTFY_BEHIND_PROXY]
+   --proxy-forwarded-header value, --proxy_forwarded_header value                                                         use specified header to determine visitor IP address (for rate limiting) (default: "X-Forwarded-For") [$NTFY_PROXY_FORWARDED_HEADER]
+   --proxy-trusted-hosts value, --proxy_trusted_hosts value                                                               comma-separated list of trusted IP addresses, hosts, or CIDRs to remove from forwarded header [$NTFY_PROXY_TRUSTED_HOSTS]
    --stripe-secret-key value, --stripe_secret_key value                                                                   key used for the Stripe API communication, this enables payments [$NTFY_STRIPE_SECRET_KEY]
    --stripe-webhook-key value, --stripe_webhook_key value                                                                 key required to validate the authenticity of incoming webhooks from Stripe [$NTFY_STRIPE_WEBHOOK_KEY]
    --billing-contact value, --billing_contact value                                                                       e-mail or website to display in upgrade dialog (only if payments are enabled) [$NTFY_BILLING_CONTACT]
@@ -1526,5 +2545,7 @@ OPTIONS:
    --web-push-file value, --web_push_file value                                                                           file used to store web push subscriptions [$NTFY_WEB_PUSH_FILE]
    --web-push-email-address value, --web_push_email_address value                                                         e-mail address of sender, required to use browser push services [$NTFY_WEB_PUSH_EMAIL_ADDRESS]
    --web-push-startup-queries value, --web_push_startup_queries value                                                     queries run when the web push database is initialized [$NTFY_WEB_PUSH_STARTUP_QUERIES]
-   --help, -h                                                                                                             show help
+   --web-push-expiry-duration value, --web_push_expiry_duration value                                                     automatically expire unused subscriptions after this time (default: "60d") [$NTFY_WEB_PUSH_EXPIRY_DURATION]
+   --web-push-expiry-warning-duration value, --web_push_expiry_warning_duration value                                     send web push warning notification after this time before expiring unused subscriptions (default: "55d") [$NTFY_WEB_PUSH_EXPIRY_WARNING_DURATION]
+   --help, -h 
 ```

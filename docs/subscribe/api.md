@@ -132,7 +132,7 @@ easy to use. Here's what it looks like. You may also want to check out the [full
 ### Subscribe as raw stream
 The `/raw` endpoint will output one line per message, and **will only include the message body**. It's useful for extremely
 simple scripts, and doesn't include all the data. Additional fields such as [priority](../publish.md#message-priority), 
-[tags](../publish.md#tags--emojis--) or [message title](../publish.md#message-title) are not included in this output 
+[tags](../publish.md#tags-emojis) or [message title](../publish.md#message-title) are not included in this output 
 format. Keepalive messages are sent as empty lines.
 
 === "Command line (curl)"
@@ -245,6 +245,9 @@ combined with `since=` (defaults to `since=all`).
 curl -s "ntfy.sh/mytopic/json?poll=1"
 ```
 
+Note that a poll without `since=` returns a topic's **entire cache**, which on a busy topic can be
+large. See [replay limits](#replay-limits) below.
+
 ### Fetch cached messages
 Messages may be cached for a couple of hours (see [message caching](../config.md#message-cache)) to account for network
 interruptions of subscribers. If the server has configured message caching, you can read back what you missed by using 
@@ -257,6 +260,14 @@ curl -s "ntfy.sh/mytopic/json?since=1645970742"
 curl -s "ntfy.sh/mytopic/json?since=nFS3knfcQ1xe"
 ```
 
+### Fetch latest message
+If you only want the most recent message sent to a topic and do not have a message ID or timestamp to use with
+`since=`, you can use `since=latest` to grab the most recent message from the cache for a particular topic.
+
+```
+curl -s "ntfy.sh/mytopic/json?poll=1&since=latest"
+```
+
 ### Fetch scheduled messages
 Messages that are [scheduled to be delivered](../publish.md#scheduled-delivery) at a later date are not typically 
 returned when subscribing via the API, which makes sense, because after all, the messages have technically not been 
@@ -265,6 +276,28 @@ parameter (makes most sense with the `poll=1` parameter):
 
 ```
 curl -s "ntfy.sh/mytopic/json?poll=1&sched=1"
+```
+
+### Replay limits
+Reading cached messages (a `poll=1` request, or any request with `since=`) replays messages the server
+already stored, so unlike a live subscription its cost grows with the size of the topic's cache. Two
+server-side limits apply, both of which a well-behaved client should handle:
+
+* **The response is size-capped.** A replay returns only the newest messages that fit in 10 MB
+  **per topic** (counting body, title, tags and every other publisher-set field), and a capped response carries an `X-Messages-Truncated: 1` header. If you see that
+  header, older messages were dropped and you did not receive the full cache. In practice this only
+  affects very large topics; a client polling with `since=` never comes close.
+* **Replayed bytes count against your daily bandwidth budget**, the same one attachment downloads use
+  (see [limitations](../publish.md#limitations)). Exceeding it returns `HTTP 429` with ntfy error code
+  `42905`, and no messages are written.
+
+Both limits exist because a poll without `since=` re-reads the whole cache every time. If you are
+polling repeatedly, **pass `since=<last message ID>`** rather than re-fetching everything. The limits
+still apply to a `since=` replay, but it returns only what is new, so in practice you will not come
+near either one:
+
+```
+curl -s "ntfy.sh/mytopic/json?poll=1&since=nFS3knfcQ1xe"
 ```
 
 ### Filter messages
@@ -287,7 +320,7 @@ Available filters (all case-insensitive):
 | `message`       | `X-Message`, `m`          | `ntfy.sh/mytopic/json?message=lalala`         | Only return messages that match this exact message string               |
 | `title`         | `X-Title`, `t`            | `ntfy.sh/mytopic/json?title=some+title`       | Only return messages that match this exact title string                 |
 | `priority`      | `X-Priority`, `prio`, `p` | `ntfy.sh/mytopic/json?p=high,urgent`          | Only return messages that match *any priority listed* (comma-separated) |
-| `tags`          | `X-Tags`, `tag`, `ta`     | `ntfy.sh/mytopic?/jsontags=error,alert`       | Only return messages that match *all listed tags* (comma-separated)     |
+| `tags`          | `X-Tags`, `tag`, `ta`     | `ntfy.sh/mytopic/json?tags=error,alert`       | Only return messages that match *all listed tags* (comma-separated)     |
 
 ### Subscribe to multiple topics
 It's possible to subscribe to multiple topics in one HTTP call by providing a comma-separated list of topics 
@@ -300,12 +333,17 @@ $ curl -s ntfy.sh/mytopic1,mytopic2/json
 {"id":"Cm02DsxUHb","time":1637182643,"event":"message","topic":"mytopic2","message":"for topic 2"}
 ```
 
+When replaying cached messages for several topics at once, they are ordered by their `time` field.
+Because `time` has **second granularity**, messages published within the same second share a sort key:
+each topic's own messages stay in publish order, but the interleaving *between* topics is not defined.
+If you need a total order across topics, sort by `time` and fall back to the order received.
+
 ### Authentication
 Depending on whether the server is configured to support [access control](../config.md#access-control), some topics
 may be read/write protected so that only users with the correct credentials can subscribe or publish to them.
 To publish/subscribe to protected topics, you can:
 
-* Use [basic auth](../publish.md#basic-auth), e.g. `Authorization: Basic dGVzdHVzZXI6ZmFrZXBhc3N3b3Jk`
+* Use [basic auth](../publish.md#authentication), e.g. `Authorization: Basic dGVzdHVzZXI6ZmFrZXBhc3N3b3Jk`
 * or use the [`auth` query parameter](../publish.md#query-param), e.g. `?auth=QmFzaWMgZEdWemRIVnpaWEk2Wm1GclpYQmhjM04zYjNKaw`
 
 Please refer to the [publishing documentation](../publish.md#authentication) for additional details.
@@ -316,20 +354,21 @@ format of the message. It's very straight forward:
 
 **Message**:
 
-| Field        | Required | Type                                              | Example                                               | Description                                                                                                                          |
-|--------------|----------|---------------------------------------------------|-------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
-| `id`         | ✔️       | *string*                                          | `hwQ2YpKdmg`                                          | Randomly chosen message identifier                                                                                                   |
-| `time`       | ✔️       | *number*                                          | `1635528741`                                          | Message date time, as Unix time stamp                                                                                                |  
-| `expires`    | (✔)️     | *number*                                          | `1673542291`                                          | Unix time stamp indicating when the message will be deleted, not set if `Cache: no` is sent                                          |  
-| `event`      | ✔️       | `open`, `keepalive`, `message`, or `poll_request` | `message`                                             | Message type, typically you'd be only interested in `message`                                                                        |
-| `topic`      | ✔️       | *string*                                          | `topic1,topic2`                                       | Comma-separated list of topics the message is associated with; only one for all `message` events, but may be a list in `open` events |
-| `message`    | -        | *string*                                          | `Some message`                                        | Message body; always present in `message` events                                                                                     |
-| `title`      | -        | *string*                                          | `Some title`                                          | Message [title](../publish.md#message-title); if not set defaults to `ntfy.sh/<topic>`                                               |
-| `tags`       | -        | *string array*                                    | `["tag1","tag2"]`                                     | List of [tags](../publish.md#tags-emojis) that may or not map to emojis                                                              |
-| `priority`   | -        | *1, 2, 3, 4, or 5*                                | `4`                                                   | Message [priority](../publish.md#message-priority) with 1=min, 3=default and 5=max                                                   |
-| `click`      | -        | *URL*                                             | `https://example.com`                                 | Website opened when notification is [clicked](../publish.md#click-action)                                                            |
-| `actions`    | -        | *JSON array*                                      | *see [actions buttons](../publish.md#action-buttons)* | [Action buttons](../publish.md#action-buttons) that can be displayed in the notification                                             |
-| `attachment` | -        | *JSON object*                                     | *see below*                                           | Details about an attachment (name, URL, size, ...)                                                                                   |
+| Field         | Required | Type                                                                            | Example                                               | Description                                                                                                                          |
+|---------------|----------|---------------------------------------------------------------------------------|-------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
+| `id`          | ✔️       | *string*                                                                        | `hwQ2YpKdmg`                                          | Randomly chosen message identifier                                                                                                   |
+| `time`        | ✔️       | *number*                                                                        | `1635528741`                                          | Message date time, as Unix time stamp                                                                                                |  
+| `expires`     | (✔)️     | *number*                                                                        | `1673542291`                                          | Unix time stamp indicating when the message will be deleted, not set if `Cache: no` is sent                                          |  
+| `event`       | ✔️       | `open`, `keepalive`, `message`, `message_delete`, `message_clear`, `poll_request` | `message`                                             | Message type, typically you'd be only interested in `message`                                                                        |
+| `topic`       | ✔️       | *string*                                                                        | `topic1,topic2`                                       | Comma-separated list of topics the message is associated with; only one for all `message` events, but may be a list in `open` events |
+| `sequence_id` | -        | *string*                                                                        | `my-sequence-123`                                     | Sequence ID for [updating/deleting notifications](../publish.md#updating-deleting-notifications)                                 |
+| `message`     | -        | *string*                                                                        | `Some message`                                        | Message body; always present in `message` events                                                                                     |
+| `title`       | -        | *string*                                                                        | `Some title`                                          | Message [title](../publish.md#message-title); if not set defaults to `ntfy.sh/<topic>`                                               |
+| `tags`        | -        | *string array*                                                                  | `["tag1","tag2"]`                                     | List of [tags](../publish.md#tags-emojis) that may or not map to emojis                                                              |
+| `priority`    | -        | *1, 2, 3, 4, or 5*                                                              | `4`                                                   | Message [priority](../publish.md#message-priority) with 1=min, 3=default and 5=max                                                   |
+| `click`       | -        | *URL*                                                                           | `https://example.com`                                 | Website opened when notification is [clicked](../publish.md#click-action)                                                            |
+| `actions`     | -        | *JSON array*                                                                    | *see [actions buttons](../publish.md#action-buttons)* | [Action buttons](../publish.md#action-buttons) that can be displayed in the notification                                             |
+| `attachment`  | -        | *JSON object*                                                                   | *see below*                                           | Details about an attachment (name, URL, size, ...)                                                                                   |
 
 **Attachment** (part of the message, see [attachments](../publish.md#attachments) for details):
 
@@ -418,7 +457,7 @@ and can be passed as **HTTP headers** or **query parameters in the URL**. They a
 
 | Parameter   | Aliases (case-insensitive) | Description                                                                     |
 |-------------|----------------------------|---------------------------------------------------------------------------------|
-| `poll`      | `X-Poll`, `po`             | Return cached messages and close connection                                     |
+| `poll`      | `X-Poll`, `po`             | Return cached messages and close connection (see [replay limits](#replay-limits)) |
 | `since`     | `X-Since`, `si`            | Return cached messages since timestamp, duration or message ID                  |
 | `scheduled` | `X-Scheduled`, `sched`     | Include scheduled/delayed messages in message list                              |
 | `id`        | `X-ID`                     | Filter: Only return messages that match this exact message ID                   |

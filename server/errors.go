@@ -3,8 +3,9 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"heckel.io/ntfy/v2/log"
 	"net/http"
+
+	"heckel.io/ntfy/v2/log"
 )
 
 // errHTTP is a generic HTTP error for any non-200 HTTP error
@@ -77,6 +78,21 @@ func (e errHTTP) clone() errHTTP {
 	}
 }
 
+// errWebSocketPostUpgrade is a wrapper error indicating an error occurred after the WebSocket
+// upgrade completed (i.e., the connection was hijacked). This is used to avoid calling
+// WriteHeader on hijacked connections, which causes log spam.
+type errWebSocketPostUpgrade struct {
+	err error
+}
+
+func (e *errWebSocketPostUpgrade) Error() string {
+	return e.err.Error()
+}
+
+func (e *errWebSocketPostUpgrade) Unwrap() error {
+	return e.err
+}
+
 var (
 	errHTTPBadRequest                                = &errHTTP{40000, http.StatusBadRequest, "invalid request", "", nil}
 	errHTTPBadRequestEmailDisabled                   = &errHTTP{40001, http.StatusBadRequest, "e-mail notifications are not enabled", "https://ntfy.sh/docs/config/#e-mail-notifications", nil}
@@ -120,9 +136,22 @@ var (
 	errHTTPBadRequestTemplateMessageTooLarge         = &errHTTP{40041, http.StatusBadRequest, "invalid request: message or title is too large after replacing template", "https://ntfy.sh/docs/publish/#message-templating", nil}
 	errHTTPBadRequestTemplateMessageNotJSON          = &errHTTP{40042, http.StatusBadRequest, "invalid request: message body must be JSON if templating is enabled", "https://ntfy.sh/docs/publish/#message-templating", nil}
 	errHTTPBadRequestTemplateInvalid                 = &errHTTP{40043, http.StatusBadRequest, "invalid request: could not parse template", "https://ntfy.sh/docs/publish/#message-templating", nil}
-	errHTTPBadRequestTemplateDisallowedFunctionCalls = &errHTTP{40044, http.StatusBadRequest, "invalid request: template contains disallowed function calls, e.g. template, call, or define", "https://ntfy.sh/docs/publish/#message-templating", nil}
+	errHTTPBadRequestTemplateDisallowedFunctionCalls = &errHTTP{40044, http.StatusBadRequest, "invalid request: template contains disallowed function calls, e.g. template, call, define, or block", "https://ntfy.sh/docs/publish/#message-templating", nil}
 	errHTTPBadRequestTemplateExecuteFailed           = &errHTTP{40045, http.StatusBadRequest, "invalid request: template execution failed", "https://ntfy.sh/docs/publish/#message-templating", nil}
+	errHTTPBadRequestTemplateExecutionTimeout        = &errHTTP{40055, http.StatusBadRequest, "invalid request: template execution timed out", "https://ntfy.sh/docs/publish/#message-templating", nil}
 	errHTTPBadRequestInvalidUsername                 = &errHTTP{40046, http.StatusBadRequest, "invalid request: invalid username", "", nil}
+	errHTTPBadRequestTemplateFileNotFound            = &errHTTP{40047, http.StatusBadRequest, "invalid request: template file not found", "https://ntfy.sh/docs/publish/#message-templating", nil}
+	errHTTPBadRequestTemplateFileInvalid             = &errHTTP{40048, http.StatusBadRequest, "invalid request: template file invalid", "https://ntfy.sh/docs/publish/#message-templating", nil}
+	errHTTPBadRequestSequenceIDInvalid               = &errHTTP{40049, http.StatusBadRequest, "invalid request: sequence ID invalid", "https://ntfy.sh/docs/publish/#updating-deleting-notifications", nil}
+	errHTTPBadRequestEmailAddressInvalid             = &errHTTP{40050, http.StatusBadRequest, "invalid request: invalid e-mail address", "https://ntfy.sh/docs/publish/#e-mail-notifications", nil}
+	errHTTPBadRequestEmailVerificationLinkInvalid    = &errHTTP{40051, http.StatusBadRequest, "invalid request: email verification link invalid or expired", "", nil}
+	errHTTPBadRequestEmailAddressNotVerified         = &errHTTP{40052, http.StatusBadRequest, "invalid request: email address not verified", "https://ntfy.sh/docs/publish/#e-mail-notifications", nil}
+	errHTTPBadRequestAnonymousEmailNotAllowed        = &errHTTP{40053, http.StatusBadRequest, "invalid request: anonymous email sending is not allowed", "https://ntfy.sh/docs/publish/#e-mail-notifications", nil}
+	errHTTPBadRequestResetLinkInvalid                = &errHTTP{40054, http.StatusBadRequest, "invalid request: password reset link invalid or expired", "", nil}
+	errHTTPBadRequestTemplateTooLarge                = &errHTTP{40056, http.StatusBadRequest, "invalid request: template too large", "https://ntfy.sh/docs/publish/#message-templating", nil}
+	errHTTPBadRequestTitleTooLarge                   = &errHTTP{40057, http.StatusBadRequest, "invalid request: title is too large", "https://ntfy.sh/docs/publish/#limitations", nil}
+	errHTTPBadRequestTagsTooLarge                    = &errHTTP{40058, http.StatusBadRequest, "invalid request: tags are too large", "https://ntfy.sh/docs/publish/#limitations", nil}
+	errHTTPBadRequestTimezoneInvalid                 = &errHTTP{40059, http.StatusBadRequest, "invalid request: invalid timezone", "https://ntfy.sh/docs/publish/#scheduled-delivery", nil}
 	errHTTPNotFound                                  = &errHTTP{40401, http.StatusNotFound, "page not found", "", nil}
 	errHTTPUnauthorized                              = &errHTTP{40101, http.StatusUnauthorized, "unauthorized", "https://ntfy.sh/docs/publish/#authentication", nil}
 	errHTTPForbidden                                 = &errHTTP{40301, http.StatusForbidden, "forbidden", "https://ntfy.sh/docs/publish/#authentication", nil}
@@ -130,6 +159,10 @@ var (
 	errHTTPConflictTopicReserved                     = &errHTTP{40902, http.StatusConflict, "conflict: access control entry for topic or topic pattern already exists", "", nil}
 	errHTTPConflictSubscriptionExists                = &errHTTP{40903, http.StatusConflict, "conflict: topic subscription already exists", "", nil}
 	errHTTPConflictPhoneNumberExists                 = &errHTTP{40904, http.StatusConflict, "conflict: phone number already exists", "", nil}
+	errHTTPConflictProvisionedUserChange             = &errHTTP{40905, http.StatusConflict, "conflict: cannot change or delete provisioned user", "", nil}
+	errHTTPConflictProvisionedTokenChange            = &errHTTP{40906, http.StatusConflict, "conflict: cannot change or delete provisioned token", "", nil}
+	errHTTPConflictEmailExists                       = &errHTTP{40907, http.StatusConflict, "conflict: email address already exists", "", nil}
+	errHTTPConflictEmailPrimaryElsewhere             = &errHTTP{40908, http.StatusConflict, "conflict: email address is the primary email on another account", "", nil}
 	errHTTPGonePhoneVerificationExpired              = &errHTTP{41001, http.StatusGone, "phone number verification expired or does not exist", "", nil}
 	errHTTPEntityTooLargeAttachment                  = &errHTTP{41301, http.StatusRequestEntityTooLarge, "attachment too large, or bandwidth limit reached", "https://ntfy.sh/docs/publish/#limitations", nil}
 	errHTTPEntityTooLargeMatrixRequest               = &errHTTP{41302, http.StatusRequestEntityTooLarge, "Matrix request is larger than the max allowed length", "", nil}
@@ -139,11 +172,12 @@ var (
 	errHTTPTooManyRequestsLimitSubscriptions         = &errHTTP{42903, http.StatusTooManyRequests, "limit reached: too many active subscriptions", "https://ntfy.sh/docs/publish/#limitations", nil}
 	errHTTPTooManyRequestsLimitTotalTopics           = &errHTTP{42904, http.StatusTooManyRequests, "limit reached: the total number of topics on the server has been reached, please contact the admin", "https://ntfy.sh/docs/publish/#limitations", nil}
 	errHTTPTooManyRequestsLimitAttachmentBandwidth   = &errHTTP{42905, http.StatusTooManyRequests, "limit reached: daily bandwidth reached", "https://ntfy.sh/docs/publish/#limitations", nil}
-	errHTTPTooManyRequestsLimitAccountCreation       = &errHTTP{42906, http.StatusTooManyRequests, "limit reached: too many accounts created", "https://ntfy.sh/docs/publish/#limitations", nil} // FIXME document limit
+	errHTTPTooManyRequestsLimitAccountActions        = &errHTTP{42906, http.StatusTooManyRequests, "limit reached: too many account requests", "https://ntfy.sh/docs/publish/#limitations", nil} // FIXME document limit
 	errHTTPTooManyRequestsLimitReservations          = &errHTTP{42907, http.StatusTooManyRequests, "limit reached: too many topic reservations for this user", "", nil}
 	errHTTPTooManyRequestsLimitMessages              = &errHTTP{42908, http.StatusTooManyRequests, "limit reached: daily message quota reached", "https://ntfy.sh/docs/publish/#limitations", nil}
 	errHTTPTooManyRequestsLimitAuthFailure           = &errHTTP{42909, http.StatusTooManyRequests, "limit reached: too many auth failures", "https://ntfy.sh/docs/publish/#limitations", nil} // FIXME document limit
 	errHTTPTooManyRequestsLimitCalls                 = &errHTTP{42910, http.StatusTooManyRequests, "limit reached: daily phone call quota reached", "https://ntfy.sh/docs/publish/#limitations", nil}
+	errHTTPTooManyRequestsLimitTopicCreation         = &errHTTP{42911, http.StatusTooManyRequests, "limit reached: too many new topics, please wait", "https://ntfy.sh/docs/publish/#limitations", nil}
 	errHTTPInternalError                             = &errHTTP{50001, http.StatusInternalServerError, "internal server error", "", nil}
 	errHTTPInternalErrorInvalidPath                  = &errHTTP{50002, http.StatusInternalServerError, "internal server error: invalid path", "", nil}
 	errHTTPInternalErrorMissingBaseURL               = &errHTTP{50003, http.StatusInternalServerError, "internal server error: base-url must be be configured for this feature", "https://ntfy.sh/docs/config/", nil}

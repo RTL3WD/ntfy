@@ -1,9 +1,12 @@
+//go:build !nofirebase
+
 package server
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"heckel.io/ntfy/v2/model"
 	"heckel.io/ntfy/v2/user"
 	"net/netip"
 	"strings"
@@ -61,7 +64,7 @@ func (s *testFirebaseSender) Messages() []*messaging.Message {
 }
 
 func TestToFirebaseMessage_Keepalive(t *testing.T) {
-	m := newKeepaliveMessage("mytopic")
+	m := model.NewKeepaliveMessage("mytopic")
 	fbm, err := toFirebaseMessage(m, nil)
 	require.Nil(t, err)
 	require.Equal(t, "mytopic", fbm.Topic)
@@ -92,7 +95,7 @@ func TestToFirebaseMessage_Keepalive(t *testing.T) {
 }
 
 func TestToFirebaseMessage_Open(t *testing.T) {
-	m := newOpenMessage("mytopic")
+	m := model.NewOpenMessage("mytopic")
 	fbm, err := toFirebaseMessage(m, nil)
 	require.Nil(t, err)
 	require.Equal(t, "mytopic", fbm.Topic)
@@ -123,13 +126,13 @@ func TestToFirebaseMessage_Open(t *testing.T) {
 }
 
 func TestToFirebaseMessage_Message_Normal_Allowed(t *testing.T) {
-	m := newDefaultMessage("mytopic", "this is a message")
+	m := model.NewDefaultMessage("mytopic", "this is a message")
 	m.Priority = 4
 	m.Tags = []string{"tag 1", "tag2"}
 	m.Click = "https://google.com"
 	m.Icon = "https://ntfy.sh/static/img/ntfy.png"
 	m.Title = "some title"
-	m.Actions = []*action{
+	m.Actions = []*model.Action{
 		{
 			ID:     "123",
 			Action: "view",
@@ -148,7 +151,7 @@ func TestToFirebaseMessage_Message_Normal_Allowed(t *testing.T) {
 			},
 		},
 	}
-	m.Attachment = &attachment{
+	m.Attachment = &model.Attachment{
 		Name:    "some file.jpg",
 		Type:    "image/jpeg",
 		Size:    12345,
@@ -175,6 +178,7 @@ func TestToFirebaseMessage_Message_Normal_Allowed(t *testing.T) {
 				"time":               fmt.Sprintf("%d", m.Time),
 				"event":              "message",
 				"topic":              "mytopic",
+				"sequence_id":        "",
 				"priority":           "4",
 				"tags":               strings.Join(m.Tags, ","),
 				"click":              "https://google.com",
@@ -197,6 +201,7 @@ func TestToFirebaseMessage_Message_Normal_Allowed(t *testing.T) {
 		"time":               fmt.Sprintf("%d", m.Time),
 		"event":              "message",
 		"topic":              "mytopic",
+		"sequence_id":        "",
 		"priority":           "4",
 		"tags":               strings.Join(m.Tags, ","),
 		"click":              "https://google.com",
@@ -215,7 +220,7 @@ func TestToFirebaseMessage_Message_Normal_Allowed(t *testing.T) {
 }
 
 func TestToFirebaseMessage_Message_Normal_Not_Allowed(t *testing.T) {
-	m := newDefaultMessage("mytopic", "this is a message")
+	m := model.NewDefaultMessage("mytopic", "this is a message")
 	m.Priority = 5
 	fbm, err := toFirebaseMessage(m, &testAuther{Allow: false}) // Not allowed!
 	require.Nil(t, err)
@@ -223,18 +228,30 @@ func TestToFirebaseMessage_Message_Normal_Not_Allowed(t *testing.T) {
 	require.Equal(t, &messaging.AndroidConfig{
 		Priority: "high",
 	}, fbm.Android)
-	require.Equal(t, "", fbm.Data["message"])
-	require.Equal(t, "", fbm.Data["priority"])
+	require.Equal(t, "New message", fbm.Data["message"])
+	require.Equal(t, "5", fbm.Data["priority"])
 	require.Equal(t, map[string]string{
-		"id":    m.ID,
-		"time":  fmt.Sprintf("%d", m.Time),
-		"event": "poll_request",
-		"topic": "mytopic",
+		"id":           m.ID,
+		"time":         fmt.Sprintf("%d", m.Time),
+		"event":        "poll_request",
+		"topic":        "mytopic",
+		"sequence_id":  "",
+		"message":      "New message",
+		"title":        "",
+		"tags":         "",
+		"click":        "",
+		"icon":         "",
+		"priority":     "5",
+		"encoding":     "",
+		"content_type": "",
+		"poll_id":      m.ID,
 	}, fbm.Data)
+	require.Equal(t, "", fbm.APNS.Payload.Aps.Alert.Title)
+	require.Equal(t, "New message", fbm.APNS.Payload.Aps.Alert.Body)
 }
 
 func TestToFirebaseMessage_PollRequest(t *testing.T) {
-	m := newPollRequestMessage("mytopic", "fOv6k1QbCzo6")
+	m := model.NewPollRequestMessage("mytopic", "fOv6k1QbCzo6")
 	fbm, err := toFirebaseMessage(m, nil)
 	require.Nil(t, err)
 	require.Equal(t, "mytopic", fbm.Topic)
@@ -328,18 +345,18 @@ func TestMaybeTruncateFCMMessage_NotTooLong(t *testing.T) {
 func TestToFirebaseSender_Abuse(t *testing.T) {
 	sender := &testFirebaseSender{allowed: 2}
 	client := newFirebaseClient(sender, &testAuther{})
-	visitor := newVisitor(newTestConfig(t), newMemTestCache(t), nil, netip.MustParseAddr("1.2.3.4"), nil)
+	visitor := newVisitor(newTestConfig(t, ""), newMemTestCache(t), nil, netip.MustParseAddr("1.2.3.4"), nil)
 
-	require.Nil(t, client.Send(visitor, &message{Topic: "mytopic"}))
+	require.Nil(t, client.Send(visitor, &model.Message{Topic: "mytopic"}))
 	require.Equal(t, 1, len(sender.Messages()))
 
-	require.Nil(t, client.Send(visitor, &message{Topic: "mytopic"}))
+	require.Nil(t, client.Send(visitor, &model.Message{Topic: "mytopic"}))
 	require.Equal(t, 2, len(sender.Messages()))
 
-	require.Equal(t, errFirebaseQuotaExceeded, client.Send(visitor, &message{Topic: "mytopic"}))
+	require.Equal(t, errFirebaseQuotaExceeded, client.Send(visitor, &model.Message{Topic: "mytopic"}))
 	require.Equal(t, 2, len(sender.Messages()))
 
 	sender.messages = make([]*messaging.Message, 0) // Reset to test that time limit is working
-	require.Equal(t, errFirebaseTemporarilyBanned, client.Send(visitor, &message{Topic: "mytopic"}))
+	require.Equal(t, errFirebaseTemporarilyBanned, client.Send(visitor, &model.Message{Topic: "mytopic"}))
 	require.Equal(t, 0, len(sender.Messages()))
 }

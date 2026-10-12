@@ -9,9 +9,11 @@ import poller from "../app/Poller";
 import pruner from "../app/Pruner";
 import session from "../app/Session";
 import accountApi from "../app/AccountApi";
+import versionChecker from "../app/VersionChecker";
 import { UnauthorizedError } from "../app/errors";
 import notifier from "../app/Notifier";
 import prefs from "../app/Prefs";
+import { EVENT_MESSAGE_DELETE, EVENT_MESSAGE_CLEAR, SW_PERIODIC_SYNC_EXTEND_TOKEN_TAG } from "../app/events";
 
 /**
  * Wire connectionManager and subscriptionManager so that subscriptions are updated when the connection
@@ -28,7 +30,7 @@ export const useConnectionListeners = (account, subscriptions, users, webPushTop
     // wsSubscriptions should stay stable unless the list of subscription IDs changes. Without the memo, the connection
     // listener calls a refresh for no reason. This isn't a problem due to the makeConnectionId, but it triggers an
     // unnecessary recomputation for every received message.
-    [JSON.stringify({ subscriptions: subscriptions?.map(({ id }) => id), webPushTopics })]
+    [JSON.stringify({ subscriptions: subscriptions?.map(({ id }) => id), webPushTopics })],
   );
 
   // Register listeners for incoming messages, and connection state changes
@@ -49,10 +51,29 @@ export const useConnectionListeners = (account, subscriptions, users, webPushTop
         }
       };
 
-      const handleNotification = async (subscriptionId, notification) => {
-        const added = await subscriptionManager.addNotification(subscriptionId, notification);
-        if (added) {
-          await subscriptionManager.notify(subscriptionId, notification);
+      const handleNotification = async (subscription, notification) => {
+        // This logic is (partially) duplicated in
+        // - Android: SubscriberService::onNotificationReceived()
+        // - Android: FirebaseService::onMessageReceived()
+        // - Web app: hooks.js:handleNotification()
+        // - Web app: sw.js:handleMessage(), sw.js:handleMessageClear(), ...
+
+        if (notification.event === EVENT_MESSAGE_DELETE && notification.sequence_id) {
+          await subscriptionManager.deleteNotificationBySequenceId(subscription.id, notification.sequence_id);
+          await notifier.cancel(subscription, notification);
+        } else if (notification.event === EVENT_MESSAGE_CLEAR && notification.sequence_id) {
+          await subscriptionManager.markNotificationReadBySequenceId(subscription.id, notification.sequence_id);
+          await notifier.cancel(subscription, notification);
+        } else {
+          // Regular message: delete existing and add new
+          const sequenceId = notification.sequence_id || notification.id;
+          if (sequenceId) {
+            await subscriptionManager.deleteNotificationBySequenceId(subscription.id, sequenceId);
+          }
+          const added = await subscriptionManager.addNotification(subscription.id, notification);
+          if (added) {
+            await subscriptionManager.notify(subscription.id, notification);
+          }
         }
       };
 
@@ -68,7 +89,7 @@ export const useConnectionListeners = (account, subscriptions, users, webPushTop
         if (subscription.internal) {
           await handleInternalMessage(message);
         } else {
-          await handleNotification(subscriptionId, message);
+          await handleNotification(subscription, message);
         }
       };
 
@@ -82,7 +103,7 @@ export const useConnectionListeners = (account, subscriptions, users, webPushTop
     },
     // We have to disable dep checking for "navigate". This is fine, it never changes.
 
-    []
+    [],
   );
 
   // Sync topic listener: For accounts with sync_topic, subscribe to an internal topic
@@ -90,7 +111,7 @@ export const useConnectionListeners = (account, subscriptions, users, webPushTop
     if (!account || !account.sync_topic) {
       return;
     }
-    subscriptionManager.add(config.base_url, account.sync_topic, { internal: true }); // Dangle!
+    subscriptionManager.upsert(config.base_url, account.sync_topic, { internal: true }); // Dangle!
   }, [account]);
 
   // When subscriptions or users change, refresh the connections
@@ -118,7 +139,7 @@ export const useAutoSubscribe = (subscriptions, selected) => {
       const baseUrl = params.baseUrl ? expandSecureUrl(params.baseUrl) : config.base_url;
       console.log(`[Hooks] Auto-subscribing to ${topicUrl(baseUrl, params.topic)}`);
       (async () => {
-        const subscription = await subscriptionManager.add(baseUrl, params.topic);
+        const subscription = await subscriptionManager.upsert(baseUrl, params.topic);
         if (session.exists()) {
           try {
             await accountApi.addSubscription(baseUrl, params.topic);
@@ -212,7 +233,7 @@ export const useWebPushTopics = () => {
   const topics = useLiveQuery(
     async () => subscriptionManager.webPushTopics(pushPossible),
     // invalidate (reload) query when these values change
-    [pushPossible]
+    [pushPossible],
   );
 
   useWebPushListener(topics);
@@ -231,7 +252,9 @@ export const useIsLaunchedPWA = () => {
 
   useEffect(() => {
     if (isIOSStandalone) {
-      return () => {}; // No need to listen for events on iOS
+      return () => {
+        // No need to listen for events on iOS
+      };
     }
     const handler = (evt) => {
       console.log(`[useIsLaunchedPWA] App is now running ${evt.matches ? "standalone" : "in the browser"}`);
@@ -261,6 +284,52 @@ export const useStandaloneWebPushAutoSubscribe = () => {
 };
 
 /**
+ * Registers a periodicsync listener for `extend_token` (see sw.js).
+ * This extends the token regardless of whether the browser is open.
+ *
+ * CAVEATS:
+ * - Chromium-only
+ * - Only when the PWA is _installed_ (not just running in a browser tab)
+ * - Only when notifications are granted
+ *
+ * This is an experimental feature:
+ * https://developer.mozilla.org/en-US/docs/Web/API/Web_Periodic_Background_Synchronization_API
+ */
+const usePeriodicTokenExtend = () => {
+  const isLaunchedPWA = useIsLaunchedPWA();
+  const pushPossible = useNotificationPermissionListener(() => notifier.pushPossible());
+
+  useEffect(() => {
+    (async () => {
+      if (!isLaunchedPWA) {
+        console.debug("[usePeriodicTokenExtend] Skipping: Not running as PWA");
+        return;
+      }
+
+      if (!pushPossible) {
+        console.debug("[usePeriodicTokenExtend] Skipping: Web push not possible or granted");
+        return;
+      }
+
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        if (!registration.periodicSync) {
+          console.debug("[usePeriodicTokenExtend] Skipping: Periodic Sync not supported");
+          return;
+        }
+
+        console.log(`[usePeriodicTokenExtend] Turning on periodicsync "${SW_PERIODIC_SYNC_EXTEND_TOKEN_TAG}"`);
+        await registration.periodicSync.register(SW_PERIODIC_SYNC_EXTEND_TOKEN_TAG, {
+          minInterval: 12 * 60 * 60 * 1000, // 12 hours
+        });
+      } catch (error) {
+        console.log("[usePeriodicTokenExtend] Periodic Sync could not be registered", error);
+      }
+    })();
+  }, [isLaunchedPWA, pushPossible]);
+};
+
+/**
  * Start the poller and the pruner. This is done in a side effect as opposed to just in Pruner.js
  * and Poller.js, because side effect imports are not a thing in JS, and "Optimize imports" cleans
  * up "unused" imports. See https://github.com/binwiederhier/ntfy/issues/186.
@@ -270,16 +339,19 @@ const startWorkers = () => {
   poller.startWorker();
   pruner.startWorker();
   accountApi.startWorker();
+  versionChecker.startWorker();
 };
 
 const stopWorkers = () => {
   poller.stopWorker();
   pruner.stopWorker();
   accountApi.stopWorker();
+  versionChecker.stopWorker();
 };
 
 export const useBackgroundProcesses = () => {
   useStandaloneWebPushAutoSubscribe();
+  usePeriodicTokenExtend();
 
   useEffect(() => {
     console.log("[useBackgroundProcesses] mounting");
@@ -300,4 +372,16 @@ export const useAccountListener = (setAccount) => {
       accountApi.resetListener();
     };
   }, []);
+};
+
+/**
+ * Hook to detect version/config changes and call the provided callback when a change is detected.
+ */
+export const useVersionChangeListener = (onVersionChange) => {
+  useEffect(() => {
+    versionChecker.registerListener(onVersionChange);
+    return () => {
+      versionChecker.resetListener();
+    };
+  }, [onVersionChange]);
 };

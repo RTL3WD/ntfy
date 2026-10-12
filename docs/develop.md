@@ -2,7 +2,7 @@
 Hurray 🥳 🎉, you are interested in writing code for ntfy! **That's awesome.** 😎
 
 I tried my very best to write up detailed instructions, but if at any point in time you run into issues, don't 
-hesitate to **contact me on [Discord](https://discord.gg/cT7ECsZj9w) or [Matrix](https://matrix.to/#/#ntfy:matrix.org)**.
+hesitate to reach out via one of the channels listed on the [contact page](contact.md).
 
 ## ntfy server
 The ntfy server source code is available [on GitHub](https://github.com/binwiederhier/ntfy). The codebase for the
@@ -65,8 +65,8 @@ These steps **assume Ubuntu**. Steps may vary on different Linux distributions.
 
 First, install [Go](https://go.dev/) (see [official instructions](https://go.dev/doc/install)):
 ``` shell
-wget https://go.dev/dl/go1.19.1.linux-amd64.tar.gz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.19.1.linux-amd64.tar.gz
+wget https://go.dev/dl/go1.25.8.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.25.8.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
 go version   # verifies that it worked
 ```
@@ -77,9 +77,11 @@ go install github.com/goreleaser/goreleaser@latest
 goreleaser -v   # verifies that it worked
 ```
 
-Install [nodejs](https://nodejs.org/en/) (see [official instructions](https://nodejs.org/en/download/package-manager/)):
+Install [nodejs](https://nodejs.org/en/) (see [official instructions](https://nodejs.org/en/download/package-manager/)).
+Use a current LTS release (Node 24 is what CI builds with; anything older than Node 20 will not work
+with the current Vite-based web build):
 ``` shell
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt-get install -y nodejs
 npm -v   # verifies that it worked
 ```
@@ -255,6 +257,7 @@ Reference: <https://stackoverflow.com/questions/34160509/options-for-testing-ser
     go run main.go \
       --log-level debug \
       serve \
+        --base-url http://localhost \
         --web-push-public-key KEY \
         --web-push-private-key KEY \
         --web-push-email-address <email> \
@@ -276,6 +279,67 @@ Reference: <https://stackoverflow.com/questions/34160509/options-for-testing-ser
 2. Run the server (step 2 above)
 
 3. Open <http://localhost/>
+
+### Run the web app end-to-end tests
+The web app has [Playwright](https://playwright.dev/) end-to-end tests in `web/e2e/`. They drive a real (headless) Chromium
+against a real ntfy server, and cover subscribing, publishing, notifications, signup/login, account settings, access tokens,
+reservations and languages. To build the web app and the server, and run all tests against a fresh local server, type:
+
+``` shell
+$ make web-e2e
+...
+  56 passed
+```
+
+This builds the binary `build/ntfy-e2e` (with the web app embedded), downloads Chromium if needed, and starts the server
+on `127.0.0.1:12586` with a throwaway database in `build/e2e/` (see `web/e2e/server.mjs`). The server is stopped when the
+tests are done.
+
+After `make web-e2e` has run once, you can run the tests directly from `web/`, e.g. a single spec file, or with a visible
+browser. The binary is not rebuilt this way, so **run `make web-e2e` again after changing the web app or the server**:
+
+``` shell
+$ cd web
+$ npx playwright test settings.spec.js      # Only the tests in one file
+$ npx playwright test -g "access token"     # Only tests whose name matches
+$ npx playwright test --headed              # Watch the browser while the tests run
+$ npx playwright test --ui                  # Interactive UI: pick tests, step through them
+```
+
+If a test fails, its trace is kept in `web/test-results/`. Open it with `npx playwright show-trace <path>/trace.zip` to see
+every step with screenshots, the DOM, console logs and network requests. To get traces and an HTML report for **all**
+tests, including the passing ones:
+
+``` shell
+$ npx playwright test --trace on --reporter=list,html
+$ npx playwright show-report
+```
+
+#### Against an existing server
+The tests can also run against an existing server (e.g. staging) instead of a local one. They create (and delete) their own
+users and topics on that server, so **don't run them against production**. You'll need:
+
+- an admin access token (e.g. `ntfy token add <admin-user>`), which is used to create and delete test users
+- an existing tier that allows reservations (e.g. `ntfy tier add --reservation-limit 10 e2e`), which is assigned to the
+  test users that need a paid account
+
+``` shell
+$ cd web
+$ NTFY_E2E_BASE_URL=https://staging.example.com \
+  NTFY_E2E_ADMIN_TOKEN=tk_... \
+  NTFY_E2E_TIER=e2e \
+  npx playwright test --workers 2
+```
+
+Tests for features the server has disabled (e.g. signup or reservations, as reported by `/v1/config`) are skipped. A few
+things to keep in mind:
+
+- Every run signs up one account through the web app, and ntfy only allows a few signups per IP per day, so you can run
+  the full suite about 6 times per day.
+- All tests come from your IP, so request limits may kick in; use fewer workers (e.g. `--workers 2`) if you see `429`s.
+- The reservation tests expect anonymous users to be allowed to publish and subscribe to topics that aren't reserved
+  (`auth-default-access: read-write`).
+
 ### Build the docs
 The sources for the docs live in `docs/`. Similarly to the web app, you can simply run `make docs` to build the 
 documentation. As long as you have `mkdocs` installed (see above), this should work fine:
@@ -340,16 +404,14 @@ Then either follow the steps for building with or without Firebase.
 Without Firebase, you may want to still change the default `app_base_url` in [values.xml](https://github.com/binwiederhier/ntfy-android/blob/main/app/src/main/res/values/values.xml)
 if you're self-hosting the server. Then run:
 ```
-# Remove Google dependencies (FCM)
-sed -i -e '/google-services/d' build.gradle
-sed -i -e '/google-services/d' app/build.gradle
-
 # To build an unsigned .apk (app/build/outputs/apk/fdroid/*.apk)
 ./gradlew assembleFdroidRelease
 
 # To build a bundle .aab (app/fdroid/release/*.aab)
 ./gradlew bundleFdroidRelease
 ```
+
+The F-Droid flavor automatically excludes Google Services dependencies.
 
 ### Build Play flavor (FCM)
 !!! info
@@ -384,7 +446,7 @@ strictly based off of my development on this app. There may be other versions of
 ### Apple setup
 
 !!! info
-    Along with this step, the [PLIST Deployment](#plist-deployment-and-configuration) step is also required 
+    Along with this step, the [PLIST Deployment](#plist-config) step is also required 
     for these changes to take effect in the iOS app.
 
 1. [Create a new key in Apple Developer Member Center](https://developer.apple.com/account/resources/authkeys/add)
@@ -441,6 +503,6 @@ To have instant notifications/better notification delivery when using firebase, 
 1. In XCode, find the NTFY app target. **Not** the NSE app target.
 1. Find the Asset/ folder in the project navigator
 1. Drag the `GoogleService-Info.plist` file into the Asset/ folder that you get from the firebase console. It can be 
-   found in the "Project settings" > "General" > "Your apps"  with a button labled "GoogleService-Info.plist"
+   found in the "Project settings" > "General" > "Your apps"  with a button labeled "GoogleService-Info.plist"
 
 After that, you should be all set!

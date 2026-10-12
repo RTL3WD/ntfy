@@ -31,6 +31,12 @@ GitHub have been hopeless. In case it ever becomes available, I want to know imm
 */6 * * * * if curl -s https://api.github.com/users/ntfy | grep "Not Found"; then curl -d "github.com/ntfy is available" -H "Tags: tada" -H "Prio: high" ntfy.sh/my-alerts; fi
 ```
 
+You can also use [`ntfy-run`](https://github.com/quantum5/ntfy-run) to send the output of your cronjob in the
+notification, so that you know exactly why it failed:
+
+```
+0 0 * * * ntfy-run -n https://ntfy.sh/backups --success-priority low --failure-tags warning ~/backup-computer
+```
 
 ## Low disk space alerts
 Here's a simple cronjob that I use to alert me when the disk space on the root disk is running low. It's simple, but 
@@ -161,7 +167,6 @@ services:
   watchtower:
     image: containrrr/watchtower
     environment:
-      - WATCHTOWER_NOTIFICATIONS=shoutrrr
       - WATCHTOWER_NOTIFICATION_SKIP_TITLE=True
       - WATCHTOWER_NOTIFICATION_URL=ntfy://ntfy.sh/my_watchtower_topic?title=WatchtowerUpdates
 ```
@@ -173,7 +178,14 @@ Or, if you only want to send notifications using shoutrrr:
 shoutrrr send -u "ntfy://ntfy.sh/my_watchtower_topic?title=WatchtowerUpdates" -m "testMessage"
 ```
 
-Authentication tokens are also supported via the generic webhook and authorization header using this url format (replace the domain, topic and token with your own):
+Authentication tokens are also supported:
+
+- (Recommended) Ntfy url format (replace the domain, topic and token with your own):
+```
+ntfy://:TOKEN@DOMAIN/TOPIC
+```
+
+- Generic webhook and authorization header using this url format (replace the domain, topic and token with your own):
 
 ```
 generic+https://DOMAIN/TOPIC?@authorization=Bearer+TOKEN`
@@ -627,4 +639,85 @@ or by simply providing traccar with a valid username/password combination.
 ```xml
         <entry key='sms.http.user'>phil</entry>
         <entry key='sms.http.password'>mypass</entry>
+```
+
+## Flowtriq DDoS detection
+[Flowtriq](https://flowtriq.com) is a real-time DDoS detection and mitigation platform. Its Linux agent, ftagent,
+supports webhook alerts that can POST directly to an ntfy topic, so you get push notifications on your phone
+whenever an attack is detected.
+
+Configure the webhook URL in your ftagent configuration to point to your ntfy topic:
+
+```yaml
+# /etc/ftagent/ftagent.yml
+alerts:
+  webhooks:
+    - url: https://ntfy.sh/flowtriq-attacks
+      method: POST
+```
+
+You can also use curl to test the integration manually with a sample attack alert:
+
+```bash
+curl \
+  -H "Title: DDoS Attack Detected" \
+  -H "Priority: urgent" \
+  -H "Tags: rotating_light" \
+  -d "Attack detected on 203.0.113.5: 14.2 Gbps UDP flood from 3,482 sources" \
+  ntfy.sh/flowtriq-attacks
+```
+
+## Terminal Notifications for Long-Running Commands
+
+This example provides a simple way to send notifications using [ntfy.sh](https://ntfy.sh) when a terminal command completes. It includes success or failure indicators based on the command's exit status.
+
+Store your ntfy.sh bearer token securely if access control is enabled:
+
+   ```sh
+   echo "your_bearer_token_here" > ~/.ntfy_token
+   chmod 600 ~/.ntfy_token
+   ```
+
+Add the following function and alias to your `.bashrc` or `.bash_profile`:
+
+   ```sh
+   # Function for alert notifications using ntfy.sh
+   notify_via_ntfy() {
+       local exit_status=$?  # Capture the exit status before doing anything else
+       local token=$(< ~/.ntfy_token)  # Securely read the token
+       local status_icon="$([ $exit_status -eq 0 ] && echo magic_wand || echo warning)"
+       local last_command=$(history | tail -n1 | sed -e 's/^[[:space:]]*[0-9]\{1,\}[[:space:]]*//' -e 's/[;&|][[:space:]]*alert$//')
+       # for zsh users, use the same sed pattern but get the history differently.
+       # local last_command=$(history "$HISTCMD" | sed -e 's/^[[:space:]]*[0-9]\{1,\}[[:space:]]*//' -e 's/[;&|][[:space:]]*alert$//')
+
+       curl -s -X POST "https://n.example.dev/alerts" \
+           -H "Authorization: Bearer $token" \
+           -H "Title: Terminal" \
+           -H "X-Priority: 3" \
+           -H "Tags: $status_icon" \
+           -d "Command: $last_command (Exit: $exit_status)"
+
+       echo "Tags: $status_icon"
+       echo "$last_command (Exit: $exit_status)"
+   }
+
+   # Add an "alert" alias for long running commands using ntfy.sh
+   alias alert='notify_via_ntfy'
+   ```
+
+Now you can run any long-running command and append `alert` to notify when it completes:
+
+```sh
+sleep 10; alert
+```
+![ntfy notifications on mobile device](static/img/mobile-screenshot-notification.png)
+
+**Notification Sent** with a success 🪄 (`magic_wand`) or failure ⚠️ (`warning`) tag.
+
+To test failure notifications:
+
+```sh
+false; alert  # Always fails (exit 1)
+ls --invalid; alert  # Invalid option
+cat nonexistent_file; alert  # File not found
 ```

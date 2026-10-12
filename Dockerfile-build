@@ -1,8 +1,8 @@
-FROM golang:1.22-bullseye as builder
+FROM golang:1.26-bookworm AS builder
 
 ARG VERSION=dev
 ARG COMMIT=unknown
-ARG NODE_MAJOR=18
+ARG NODE_MAJOR=24
 
 RUN apt-get update && apt-get install -y \
        build-essential ca-certificates curl gnupg \
@@ -21,14 +21,14 @@ ADD Makefile .
 
 # docs
 ADD ./requirements.txt .
-RUN make docs-deps
+RUN --mount=type=cache,target=/root/.cache/pip make docs-deps
 ADD ./mkdocs.yml .
 ADD ./docs ./docs
 RUN make docs-build
 
 # web
 ADD ./web/package.json ./web/package-lock.json ./web/
-RUN make web-deps
+RUN --mount=type=cache,target=/root/.npm make web-deps
 ADD ./web ./web
 RUN make web-build
 
@@ -40,9 +40,26 @@ ADD ./log ./log
 ADD ./server ./server
 ADD ./user ./user
 ADD ./util ./util
-RUN make VERSION=$VERSION COMMIT=$COMMIT cli-linux-server
+ADD ./payments ./payments
+ADD ./db ./db
+ADD ./message ./message
+ADD ./model ./model
+ADD ./webpush ./webpush
+ADD ./attachment ./attachment
+ADD ./mail ./mail
+ADD ./s3 ./s3
+ADD ./action ./action
+ADD ./ban ./ban
+ADD ./metrics ./metrics
+ADD ./twilio ./twilio
+ADD ./cluster ./cluster
+ADD ./template/gotext ./template/gotext
+
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build make VERSION=$VERSION COMMIT=$COMMIT cli-linux-server
 
 FROM alpine
+
+ARG VERSION=dev
 
 LABEL org.opencontainers.image.authors="philipp.heckel@gmail.com"
 LABEL org.opencontainers.image.url="https://ntfy.sh/"
@@ -52,6 +69,7 @@ LABEL org.opencontainers.image.vendor="Philipp C. Heckel"
 LABEL org.opencontainers.image.licenses="Apache-2.0, GPL-2.0"
 LABEL org.opencontainers.image.title="ntfy"
 LABEL org.opencontainers.image.description="Send push notifications to your phone or desktop using PUT/POST"
+LABEL org.opencontainers.image.version="$VERSION"
 
 COPY --from=builder /app/dist/ntfy_linux_server/ntfy /usr/bin/ntfy
 

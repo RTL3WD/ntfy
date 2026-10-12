@@ -22,6 +22,12 @@ available on [Google Play](https://play.google.com/store/apps/details?id=io.heck
 as well as an [open source iOS app](https://github.com/binwiederhier/ntfy-ios) available on the [App Store](https://apps.apple.com/us/app/ntfy/id1625396347).
 
 <p>
+  <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy"><img height="50" src="docs/static/img/badge-googleplay.png"></a>
+  <a href="https://f-droid.org/en/packages/io.heckel.ntfy/"><img width="170" src="docs/static/img/badge-fdroid.svg"></a>
+  <a href="https://apps.apple.com/us/app/ntfy/id1625396347"><img height="50" src="docs/static/img/badge-appstore.png"></a>
+</p>
+
+<p>
   <img src=".github/images/screenshot-curl.png" height="180">
   <img src=".github/images/screenshot-web-detail.png" height="180">
   <img src=".github/images/screenshot-phone-main.jpg" height="180">
@@ -56,20 +62,12 @@ For announcements of new releases and cutting-edge beta versions, please subscri
 topic. If you'd like to test the iOS app, join [TestFlight](https://testflight.apple.com/join/P1fFnAm9). For Android betas,
 join Discord/Matrix (I'll eventually make a testing channel in Google Play).
 
-## Contributing
-I welcome any contributions. Just create a PR or an issue. For larger features/ideas, please reach out
-on Discord/Matrix first to see if I'd accept them. To contribute code, check out the [build instructions](https://ntfy.sh/docs/develop/) 
-for the server and the Android app. Or, if you'd like to help translate 🇩🇪 🇺🇸 🇧🇬, you can start immediately in
-[Hosted Weblate](https://hosted.weblate.org/projects/ntfy/).
-
-<a href="https://hosted.weblate.org/engage/ntfy/">
-<img src="https://hosted.weblate.org/widgets/ntfy/-/multi-blue.svg" alt="Translation status" />
-</a>
-
 ## Sponsors
-I have just very recently started accepting donations via [GitHub Sponsors](https://github.com/sponsors/binwiederhier),
-and [Liberapay](https://liberapay.com/ntfy). I would be humbled if you helped me carry the server and developer 
-account costs. Even small donations are very much appreciated. A big fat **Thank You** to the folks who have sponsored ntfy in the past, or are still sponsoring ntfy:
+If you'd like to support the ntfy maintainers, please consider donating to [GitHub Sponsors](https://github.com/sponsors/binwiederhier) or
+and [Liberapay](https://liberapay.com/ntfy). We would be humbled if you helped carry the server and developer 
+account costs. Even small donations are very much appreciated. 
+
+A big fat **Thank You** to the individuals who have sponsored ntfy in the past, or are still sponsoring ntfy:
 
 <a href="https://github.com/neutralinsomniac"><img src="https://github.com/neutralinsomniac.png" width="40px" /></a>
 <a href="https://github.com/aspyct"><img src="https://github.com/aspyct.png" width="40px" /></a>
@@ -199,14 +197,32 @@ account costs. Even small donations are very much appreciated. A big fat **Thank
 <a href="https://github.com/herzkerl"><img src="https://github.com/herzkerl.png" width="40px" /></a>
 <a href="https://github.com/0x45796164"><img src="https://github.com/0x45796164.png" width="40px" /></a>
 <a href="https://github.com/madchr1st"><img src="https://github.com/madchr1st.png" width="40px" /></a>
+<a href="https://github.com/avalentic"><img src="https://github.com/avalentic.png" width="40px" /></a>
+<a href="https://github.com/TheCraiggers"><img src="https://github.com/TheCraiggers.png" width="40px" /></a>
+<a href="https://github.com/sheetd"><img src="https://github.com/sheetd.png" width="40px" /></a>
+<a href="https://github.com/dlt-green"><img src="https://github.com/dlt-green.png" width="40px" /></a>
+<a href="https://github.com/suhlig"><img src="https://github.com/suhlig.png" width="40px" /></a>
+<a href="https://github.com/Proximus888"><img src="https://github.com/Proximus888.png" width="40px" /></a>
+<a href="https://github.com/wielandp"><img src="https://github.com/wielandp.png" width="40px" /></a>
+<a href="https://github.com/chxseh"><img src="https://github.com/chxseh.png" width="40px" /></a>
+<a href="https://github.com/user8446"><img src="https://github.com/user8446.png" width="40px" /></a>
+<a href="https://github.com/cdf-eagles"><img src="https://github.com/cdf-eagles.png" width="40px" /></a>
 
-I'd also like to thank JetBrains for their awesome [IntelliJ IDEA](https://www.jetbrains.com/idea/),
-and [DigitalOcean](https://m.do.co/c/442b929528db) (*referral link*) for supporting the project:
+## Contributing
+I welcome any contributions. Just create a PR or an issue. For larger features/ideas, please reach out
+on Discord/Matrix first to see if I'd accept them. To contribute code, check out the [build instructions](https://ntfy.sh/docs/develop/)
+for the server and the Android app. Or, if you'd like to help translate 🇩🇪 🇺🇸 🇧🇬, you can start immediately in
+[Hosted Weblate](https://hosted.weblate.org/projects/ntfy/).
 
-<a href="https://m.do.co/c/442b929528db"><img src="https://opensource.nyc3.cdn.digitaloceanspaces.com/attribution/assets/SVG/DO_Logo_horizontal_blue.svg" width="201px"></a>
+<a href="https://hosted.weblate.org/engage/ntfy/">
+<img src="https://hosted.weblate.org/widgets/ntfy/-/multi-blue.svg" alt="Translation status" />
+</a>
 
 ## Code of Conduct
-We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, caste, color, religion, or sexual identity and orientation.
+We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for
+everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity
+and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, caste,
+color, religion, or sexual identity and orientation.
 
 **We pledge to act and interact in ways that contribute to an open, welcoming, diverse, inclusive, and healthy community.**
 
@@ -231,9 +247,11 @@ Third-party libraries and resources:
 * [github.com/mattn/go-sqlite3](https://github.com/mattn/go-sqlite3) (MIT) is used to provide the persistent message cache
 * [Firebase Admin SDK](https://github.com/firebase/firebase-admin-go) (Apache 2.0) is used to send FCM messages
 * [github/gemoji](https://github.com/github/gemoji) (MIT) is used for emoji support (specifically the [emoji.json](https://raw.githubusercontent.com/github/gemoji/master/db/emoji.json) file)
+* Go's [text/template](https://pkg.go.dev/text/template) (BSD-3-Clause) is vendored under [template/gotext/](template/gotext/) with a small patch adding an execution deadline (see [template/gotext/README.md](template/gotext/README.md))
 * [Lightbox with vanilla JS](https://yossiabramov.com/blog/vanilla-js-lightbox) as a lightbox on the landing page 
 * [HTTP middleware for gzip compression](https://gist.github.com/CJEnright/bc2d8b8dc0c1389a9feeddb110f822d7) (MIT) is used for serving static files
 * [Regex for auto-linking](https://github.com/bryanwoods/autolink-js) (MIT) is used to highlight links (the library is not used)
 * [Statically linking go-sqlite3](https://www.arp242.net/static-go.html)
 * [Linked tabs in mkdocs](https://facelessuser.github.io/pymdown-extensions/extensions/tabbed/#linked-tabs)
 * [webpush-go](https://github.com/SherClockHolmes/webpush-go) (MIT) is used to send web push notifications
+* [Sprig](https://github.com/Masterminds/sprig) (MIT) is used to add template parsing functions

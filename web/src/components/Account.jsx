@@ -2,6 +2,7 @@ import * as React from "react";
 import { useContext, useState } from "react";
 import {
   Alert,
+  Box,
   CardActions,
   CardContent,
   Chip,
@@ -31,29 +32,36 @@ import {
   DialogContent,
   TextField,
   IconButton,
+  Menu,
   MenuItem,
+  ListItemIcon,
+  ListItemText,
   DialogContentText,
   useTheme,
 } from "@mui/material";
 import EditIcon from "@mui/icons-material/Edit";
 import { Trans, useTranslation } from "react-i18next";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
+import StarIcon from "@mui/icons-material/Star";
+import StarBorderIcon from "@mui/icons-material/StarBorder";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
-import humanizeDuration from "humanize-duration";
 import CelebrationIcon from "@mui/icons-material/Celebration";
 import CloseIcon from "@mui/icons-material/Close";
-import { ContentCopy, Public } from "@mui/icons-material";
+import ContentCopy from "@mui/icons-material/ContentCopy";
+import Public from "@mui/icons-material/Public";
 import AddIcon from "@mui/icons-material/Add";
 import routes from "./routes";
-import { formatBytes, formatShortDate, formatShortDateTime, openUrl } from "../app/utils";
+import { copyToClipboard, formatBytes, formatDate, formatDateTime, formatShortDuration, openUrl } from "../app/utils";
 import accountApi, { LimitBasis, Role, SubscriptionInterval, SubscriptionStatus } from "../app/AccountApi";
 import { Pref, PrefGroup } from "./Pref";
 import db from "../app/db";
 import UpgradeDialog from "./UpgradeDialog";
-import { AccountContext } from "./App";
+import AccountContext from "./AccountContext";
+import { usePrefCache } from "./PrefCache";
 import DialogFooter from "./DialogFooter";
 import { Paragraph } from "./styles";
-import { IncorrectPasswordError, UnauthorizedError } from "../app/errors";
+import { EmailPrimaryElsewhereError, IncorrectPasswordError, UnauthorizedError } from "../app/errors";
 import { ProChip } from "./SubscriptionPopup";
 import session from "../app/Session";
 
@@ -84,6 +92,7 @@ const Basics = () => {
       <PrefGroup>
         <Username />
         <ChangePassword />
+        <Emails />
         <PhoneNumbers />
         <AccountType />
       </PrefGroup>
@@ -100,15 +109,13 @@ const Username = () => {
     <Pref labelId={labelId} title={t("account_basics_username_title")} description={t("account_basics_username_description")}>
       <div aria-labelledby={labelId}>
         {session.username()}
-        {account?.role === Role.ADMIN ? (
+        {account?.role === Role.ADMIN && (
           <>
             {" "}
             <Tooltip title={t("account_basics_username_admin_tooltip")}>
               <span style={{ cursor: "default" }}>👑</span>
             </Tooltip>
           </>
-        ) : (
-          ""
         )}
       </div>
     </Pref>
@@ -119,6 +126,7 @@ const ChangePassword = () => {
   const { t } = useTranslation();
   const [dialogKey, setDialogKey] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const { account } = useContext(AccountContext);
   const labelId = "prefChangePassword";
 
   const handleDialogOpen = () => {
@@ -136,9 +144,21 @@ const ChangePassword = () => {
         <Typography color="gray" sx={{ float: "left", fontSize: "0.7rem", lineHeight: "3.5" }}>
           ⬤⬤⬤⬤⬤⬤⬤⬤⬤⬤
         </Typography>
-        <IconButton onClick={handleDialogOpen} aria-label={t("account_basics_password_description")}>
-          <EditIcon />
-        </IconButton>
+        {!account?.provisioned ? (
+          <Tooltip title={t("account_basics_password_description")}>
+            <IconButton onClick={handleDialogOpen} aria-label={t("account_basics_password_description")}>
+              <EditIcon />
+            </IconButton>
+          </Tooltip>
+        ) : (
+          <Tooltip title={t("account_basics_cannot_edit_or_delete_provisioned_user")}>
+            <span>
+              <IconButton disabled>
+                <EditIcon />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
       </div>
       <ChangePasswordDialog key={`changePasswordDialog${dialogKey}`} open={dialogOpen} onClose={handleDialogClose} />
     </Pref>
@@ -172,7 +192,7 @@ const ChangePasswordDialog = (props) => {
   };
 
   return (
-    <Dialog open={props.open} onClose={props.onCancel} fullScreen={fullScreen}>
+    <Dialog open={props.open} onClose={props.onClose} fullScreen={fullScreen}>
       <DialogTitle>{t("account_basics_password_dialog_title")}</DialogTitle>
       <DialogContent>
         <TextField
@@ -223,7 +243,8 @@ const ChangePasswordDialog = (props) => {
 };
 
 const AccountType = () => {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
+  const { dateFormat } = usePrefCache();
   const { account } = useContext(AccountContext);
   const [upgradeDialogKey, setUpgradeDialogKey] = useState(0);
   const [upgradeDialogOpen, setUpgradeDialogOpen] = useState(false);
@@ -252,22 +273,23 @@ const AccountType = () => {
     }
   };
 
+  // The account type is a base label ("Admin", "Basic", "Free", or the tier name) plus an optional
+  // qualifier chip (admin tier status, or the billing interval).
   let accountType;
+  let qualifierChip;
   if (account.role === Role.ADMIN) {
-    const tierSuffix = account.tier
-      ? t("account_basics_tier_admin_suffix_with_tier", {
-          tier: account.tier.name,
-        })
+    accountType = t("account_basics_tier_admin");
+    qualifierChip = account.tier
+      ? t("account_basics_tier_admin_suffix_with_tier", { tier: account.tier.name })
       : t("account_basics_tier_admin_suffix_no_tier");
-    accountType = `${t("account_basics_tier_admin")} ${tierSuffix}`;
   } else if (!account.tier) {
     accountType = config.enable_payments ? t("account_basics_tier_free") : t("account_basics_tier_basic");
   } else {
     accountType = account.tier.name;
     if (account.billing?.interval === SubscriptionInterval.MONTH) {
-      accountType += ` (${t("account_basics_tier_interval_monthly")})`;
+      qualifierChip = t("account_basics_tier_interval_monthly");
     } else if (account.billing?.interval === SubscriptionInterval.YEAR) {
-      accountType += ` (${t("account_basics_tier_interval_yearly")})`;
+      qualifierChip = t("account_basics_tier_interval_yearly");
     }
   }
 
@@ -279,10 +301,12 @@ const AccountType = () => {
     >
       <div>
         {accountType}
+        {qualifierChip && <Chip size="small" label={qualifierChip} sx={{ ml: 1 }} />}
+        {account.provisioned && <Chip size="small" label={t("account_basics_tier_provisioned")} sx={{ ml: 1 }} />}
         {account.billing?.paid_until && !account.billing?.cancel_at && (
           <Tooltip
             title={t("account_basics_tier_paid_until", {
-              date: formatShortDate(account.billing?.paid_until, i18n.language),
+              date: formatDate(account.billing?.paid_until, dateFormat),
             })}
           >
             <span>
@@ -327,7 +351,7 @@ const AccountType = () => {
       {account.billing?.cancel_at > 0 && (
         <Alert severity="warning" sx={{ mt: 1 }}>
           {t("account_basics_tier_canceled_subscription", {
-            date: formatShortDate(account.billing.cancel_at, i18n.language),
+            date: formatDate(account.billing.cancel_at, dateFormat),
           })}
         </Alert>
       )}
@@ -340,6 +364,262 @@ const AccountType = () => {
         />
       </Portal>
     </Pref>
+  );
+};
+
+const Emails = () => {
+  const { t } = useTranslation();
+  const { account } = useContext(AccountContext);
+  const [dialogKey, setDialogKey] = useState(0);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [snack, setSnack] = useState(""); // Non-empty shows a transient snackbar message
+  const [menuAnchor, setMenuAnchor] = useState(null); // Chip element the actions menu is anchored to
+  const [menuEmail, setMenuEmail] = useState(null); // The email the open menu acts on
+  const labelId = "prefVerifiedEmails";
+
+  const openMenu = (ev, email) => {
+    setMenuAnchor(ev.currentTarget);
+    setMenuEmail(email);
+  };
+  const closeMenu = () => {
+    setMenuAnchor(null);
+    setMenuEmail(null);
+  };
+  const runMenuAction = (fn) => {
+    closeMenu();
+    fn(menuEmail.address);
+  };
+
+  const handleDialogOpen = () => {
+    setDialogKey((prev) => prev + 1);
+    setDialogOpen(true);
+  };
+
+  const handleDialogClose = () => {
+    setDialogOpen(false);
+  };
+
+  const handleCopy = (email) => {
+    copyToClipboard(email);
+    setSnack(t("account_basics_emails_copied_to_clipboard"));
+  };
+
+  // runEmailAction wraps an email account action with the shared error handling used by the
+  // delete/set-primary/resend handlers (redirect on unauthorized, surface a message otherwise).
+  // The account view refreshes via the server's sync event, so there's no explicit refetch here.
+  const runEmailAction = async (fn, errorMessage) => {
+    try {
+      await fn();
+    } catch (e) {
+      console.log(`[Account] Email action failed`, e);
+      if (e instanceof UnauthorizedError) {
+        await session.resetAndRedirect(routes.login);
+      } else if (e instanceof EmailPrimaryElsewhereError) {
+        setSnack(t("account_basics_emails_primary_elsewhere"));
+      } else {
+        setSnack(errorMessage ?? e.message);
+      }
+    }
+  };
+
+  const handleDelete = (email) => runEmailAction(() => accountApi.deleteEmail(email));
+  const handleSetPrimary = (email) => runEmailAction(() => accountApi.setPrimaryEmail(email));
+  const handleResend = (email) =>
+    runEmailAction(async () => {
+      await accountApi.resendEmailVerification(email);
+      setSnack(t("account_basics_emails_resent"));
+    });
+
+  if (!config.enable_emails) {
+    return null;
+  }
+
+  if (account?.limits.emails === 0) {
+    return (
+      <Pref
+        title={
+          <>
+            {t("account_basics_emails_title")}
+            {config.enable_payments && <ProChip />}
+          </>
+        }
+        description={t("account_basics_emails_description")}
+      >
+        <em>{t("account_usage_emails_none")}</em>
+      </Pref>
+    );
+  }
+
+  const emails = account?.emails ?? [];
+  // Verified addresses, primary always first
+  const verifiedEmails = emails.filter((e) => !e.pending).sort((a, b) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0));
+  const pendingEmails = emails.filter((e) => e.pending);
+  const primaryEmail = verifiedEmails.find((e) => e.primary)?.address ?? "";
+  // Recovery nudges (skipped for provisioned users -- they can't reset, and the Add-email dialog
+  // explains the limitation): prompt for a first email when there are none, or for a primary when
+  // there are emails but none is primary.
+  const recoveryRelevant = config.enable_reset_password && !account?.provisioned;
+  const hasNoEmails = verifiedEmails.length === 0 && pendingEmails.length === 0;
+  const showNoEmailWarning = recoveryRelevant && hasNoEmails;
+  const showNoPrimaryWarning = recoveryRelevant && !hasNoEmails && primaryEmail === "";
+
+  return (
+    <Pref labelId={labelId} alignTop title={t("account_basics_emails_title")} description={t("account_basics_emails_description")}>
+      <div aria-labelledby={labelId}>
+        <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.75 }}>
+          {verifiedEmails.map((email) => (
+            <Chip
+              key={email.address}
+              icon={email.primary ? <StarIcon /> : undefined}
+              label={
+                <Tooltip
+                  title={email.primary ? t("account_basics_emails_chip_actions_primary") : t("account_basics_emails_chip_actions_verified")}
+                >
+                  <span>{email.address}</span>
+                </Tooltip>
+              }
+              variant="outlined"
+              onClick={(ev) => openMenu(ev, email)}
+              onDelete={() => handleDelete(email.address)}
+              sx={email.primary ? { "& .MuiChip-icon": { color: "#fbc02d" } } : undefined}
+            />
+          ))}
+          {pendingEmails.map((email) => (
+            <Chip
+              key={email.address}
+              label={
+                <Tooltip title={t("account_basics_emails_chip_actions_unverified")}>
+                  <span>
+                    {email.address} <em>({t("account_basics_emails_unverified")})</em>
+                  </span>
+                </Tooltip>
+              }
+              variant="outlined"
+              onClick={(ev) => openMenu(ev, email)}
+              onDelete={() => handleDelete(email.address)}
+              sx={{ opacity: 0.7 }}
+            />
+          ))}
+          {verifiedEmails.length === 0 && pendingEmails.length === 0 && <em>{t("account_basics_emails_no_emails_yet")}</em>}
+          <IconButton onClick={handleDialogOpen} aria-label={t("account_basics_emails_dialog_title")}>
+            <AddIcon />
+          </IconButton>
+        </Box>
+        {showNoEmailWarning && (
+          <Alert severity="warning" sx={{ mt: 1 }}>
+            {t("account_basics_emails_no_recovery_warning")}
+          </Alert>
+        )}
+        {showNoPrimaryWarning && (
+          <Alert severity="warning" sx={{ mt: 1 }}>
+            {t("account_basics_emails_no_primary_warning")}
+          </Alert>
+        )}
+      </div>
+      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu}>
+        <MenuItem onClick={() => runMenuAction(handleCopy)}>
+          <ListItemIcon>
+            <ContentCopy fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>{t("common_copy_to_clipboard")}</ListItemText>
+        </MenuItem>
+        {menuEmail && !menuEmail.pending && !menuEmail.primary && (
+          <MenuItem onClick={() => runMenuAction(handleSetPrimary)}>
+            <ListItemIcon>
+              <StarBorderIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>{t("account_basics_emails_set_primary")}</ListItemText>
+          </MenuItem>
+        )}
+        {menuEmail && menuEmail.pending && (
+          <MenuItem onClick={() => runMenuAction(handleResend)}>
+            <ListItemIcon>
+              <RefreshIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>{t("account_basics_emails_resend")}</ListItemText>
+          </MenuItem>
+        )}
+        <MenuItem onClick={() => runMenuAction(handleDelete)}>
+          <ListItemIcon>
+            <DeleteOutlineIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>{t("account_basics_emails_delete")}</ListItemText>
+        </MenuItem>
+      </Menu>
+      <AddEmailDialog key={`addEmailDialog${dialogKey}`} open={dialogOpen} onClose={handleDialogClose} />
+      <Portal>
+        <Snackbar open={snack !== ""} autoHideDuration={3000} onClose={() => setSnack("")} message={snack} />
+      </Portal>
+    </Pref>
+  );
+};
+
+const AddEmailDialog = (props) => {
+  const theme = useTheme();
+  const { t } = useTranslation();
+  const [error, setError] = useState("");
+  const [email, setEmail] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const fullScreen = useMediaQuery(theme.breakpoints.down("sm"));
+
+  // handleSubmit starts verification: the server emails a magic link. The pending address shows
+  // up in the account list as "(unverified)" once the account refreshes.
+  const handleSubmit = async () => {
+    try {
+      setSending(true);
+      setError(""); // Clear any error from a previous attempt
+      await accountApi.startEmailVerification(email);
+      setSent(true);
+    } catch (e) {
+      console.log(`[Account] Error starting email verification`, e);
+      if (e instanceof UnauthorizedError) {
+        await session.resetAndRedirect(routes.login);
+      } else {
+        setError(e.message);
+      }
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <Dialog open={props.open} onClose={props.onClose} fullScreen={fullScreen}>
+      <DialogTitle>{t("account_basics_emails_dialog_title")}</DialogTitle>
+      <DialogContent>
+        {sent ? (
+          <DialogContentText>{t("account_basics_emails_dialog_check_inbox")}</DialogContentText>
+        ) : (
+          <>
+            <DialogContentText>{t("account_basics_emails_dialog_description")}</DialogContentText>
+            <TextField
+              autoFocus
+              margin="dense"
+              label={t("account_basics_emails_dialog_email_label")}
+              aria-label={t("account_basics_emails_dialog_email_label")}
+              placeholder={t("account_basics_emails_dialog_email_placeholder")}
+              type="email"
+              value={email}
+              onChange={(ev) => setEmail(ev.target.value)}
+              fullWidth
+              variant="standard"
+            />
+          </>
+        )}
+      </DialogContent>
+      <DialogFooter status={error}>
+        {sent ? (
+          <Button onClick={props.onClose}>{t("common_close")}</Button>
+        ) : (
+          <>
+            <Button onClick={props.onClose}>{t("common_cancel")}</Button>
+            <Button onClick={handleSubmit} disabled={sending || !/^[^\s,;]+@[^\s,;]+$/.test(email)}>
+              {t("account_basics_emails_dialog_verify_button")}
+            </Button>
+          </>
+        )}
+      </DialogFooter>
+    </Dialog>
   );
 };
 
@@ -361,7 +641,7 @@ const PhoneNumbers = () => {
   };
 
   const handleCopy = (phoneNumber) => {
-    navigator.clipboard.writeText(phoneNumber);
+    copyToClipboard(phoneNumber);
     setSnackOpen(true);
   };
 
@@ -399,22 +679,25 @@ const PhoneNumbers = () => {
   return (
     <Pref labelId={labelId} title={t("account_basics_phone_numbers_title")} description={t("account_basics_phone_numbers_description")}>
       <div aria-labelledby={labelId}>
-        {account?.phone_numbers?.map((phoneNumber) => (
-          <Chip
-            label={
-              <Tooltip title={t("common_copy_to_clipboard")}>
-                <span>{phoneNumber}</span>
-              </Tooltip>
-            }
-            variant="outlined"
-            onClick={() => handleCopy(phoneNumber)}
-            onDelete={() => handleDelete(phoneNumber)}
-          />
-        ))}
-        {!account?.phone_numbers && <em>{t("account_basics_phone_numbers_no_phone_numbers_yet")}</em>}
-        <IconButton onClick={handleDialogOpen}>
-          <AddIcon />
-        </IconButton>
+        <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.75 }}>
+          {account?.phone_numbers?.map((phoneNumber) => (
+            <Chip
+              key={phoneNumber}
+              label={
+                <Tooltip title={t("common_copy_to_clipboard")}>
+                  <span>{phoneNumber}</span>
+                </Tooltip>
+              }
+              variant="outlined"
+              onClick={() => handleCopy(phoneNumber)}
+              onDelete={() => handleDelete(phoneNumber)}
+            />
+          ))}
+          {!account?.phone_numbers && <em>{t("account_basics_phone_numbers_no_phone_numbers_yet")}</em>}
+          <IconButton onClick={handleDialogOpen}>
+            <AddIcon />
+          </IconButton>
+        </Box>
       </div>
       <AddPhoneNumberDialog key={`addPhoneNumberDialog${dialogKey}`} open={dialogOpen} onClose={handleDialogClose} />
       <Portal>
@@ -492,7 +775,7 @@ const AddPhoneNumberDialog = (props) => {
   };
 
   return (
-    <Dialog open={props.open} onClose={props.onCancel} fullScreen={fullScreen}>
+    <Dialog open={props.open} onClose={props.onClose} fullScreen={fullScreen}>
       <DialogTitle>{t("account_basics_phone_numbers_dialog_title")}</DialogTitle>
       <DialogContent>
         <DialogContentText>{t("account_basics_phone_numbers_dialog_description")}</DialogContentText>
@@ -506,7 +789,7 @@ const AddPhoneNumberDialog = (props) => {
               type="tel"
               value={phoneNumber}
               onChange={(ev) => setPhoneNumber(ev.target.value)}
-              inputProps={{ inputMode: "tel", pattern: "+[0-9]*" }}
+              slotProps={{ htmlInput: { inputMode: "tel", pattern: "+[0-9]*" } }}
               variant="standard"
               sx={{ flexGrow: 1 }}
             />
@@ -537,7 +820,7 @@ const AddPhoneNumberDialog = (props) => {
             value={code}
             onChange={(ev) => setCode(ev.target.value)}
             fullWidth
-            inputProps={{ inputMode: "numeric", pattern: "[0-9]*" }}
+            slotProps={{ htmlInput: { inputMode: "numeric", pattern: "[0-9]*" } }}
             variant="standard"
           />
         )}
@@ -690,10 +973,7 @@ const Stats = () => {
           title={t("account_usage_attachment_storage_title")}
           description={t("account_usage_attachment_storage_description", {
             filesize: formatBytes(account.limits.attachment_file_size),
-            expiry: humanizeDuration(account.limits.attachment_expiry_duration * 1000, {
-              language: i18n.resolvedLanguage,
-              fallbacks: ["en"],
-            }),
+            expiry: formatShortDuration(account.limits.attachment_expiry_duration * 1000, i18n.resolvedLanguage),
           })}
         >
           <div>
@@ -739,7 +1019,9 @@ const Stats = () => {
         )}
       </PrefGroup>
       {account.role === Role.USER && account.limits.basis === LimitBasis.IP && (
-        <Typography variant="body1">{t("account_usage_basis_ip_description")}</Typography>
+        <Typography variant="body1" sx={{ pt: 3 }}>
+          {t("account_usage_basis_ip_description")}
+        </Typography>
       )}
     </Card>
   );
@@ -797,7 +1079,8 @@ const Tokens = () => {
 };
 
 const TokensTable = (props) => {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
+  const { dateFormat, timeFormat } = usePrefCache();
   const [snackOpen, setSnackOpen] = useState(false);
   const [upsertDialogKey, setUpsertDialogKey] = useState(0);
   const [upsertDialogOpen, setUpsertDialogOpen] = useState(false);
@@ -832,7 +1115,7 @@ const TokensTable = (props) => {
   };
 
   const handleCopy = async (token) => {
-    await navigator.clipboard.writeText(token);
+    copyToClipboard(token);
     setSnackOpen(true);
   };
 
@@ -848,71 +1131,94 @@ const TokensTable = (props) => {
         </TableRow>
       </TableHead>
       <TableBody>
-        {tokens.map((token) => (
-          <TableRow key={token.token} sx={{ "&:last-child td, &:last-child th": { border: 0 } }}>
-            <TableCell
-              component="th"
-              scope="row"
-              sx={{ paddingLeft: 0, whiteSpace: "nowrap" }}
-              aria-label={t("account_tokens_table_token_header")}
-            >
-              <span>
-                <span style={{ fontFamily: "Monospace", fontSize: "0.9rem" }}>{token.token.slice(0, 12)}</span>
-                ...
-                <Tooltip title={t("common_copy_to_clipboard")} placement="right">
-                  <IconButton onClick={() => handleCopy(token.token)}>
-                    <ContentCopy />
-                  </IconButton>
-                </Tooltip>
-              </span>
-            </TableCell>
-            <TableCell aria-label={t("account_tokens_table_label_header")}>
-              {token.token === session.token() && <em>{t("account_tokens_table_current_session")}</em>}
-              {token.token !== session.token() && (token.label || "-")}
-            </TableCell>
-            <TableCell sx={{ whiteSpace: "nowrap" }} aria-label={t("account_tokens_table_expires_header")}>
-              {token.expires ? formatShortDateTime(token.expires, i18n.language) : <em>{t("account_tokens_table_never_expires")}</em>}
-            </TableCell>
-            <TableCell sx={{ whiteSpace: "nowrap" }} aria-label={t("account_tokens_table_last_access_header")}>
-              <div style={{ display: "flex", alignItems: "center" }}>
-                <span>{formatShortDateTime(token.last_access, i18n.language)}</span>
-                <Tooltip
-                  title={t("account_tokens_table_last_origin_tooltip", {
-                    ip: token.last_origin,
-                  })}
-                >
-                  <IconButton onClick={() => openUrl(`https://whatismyipaddress.com/ip/${token.last_origin}`)}>
-                    <Public />
-                  </IconButton>
-                </Tooltip>
-              </div>
-            </TableCell>
-            <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
-              {token.token !== session.token() && (
-                <>
-                  <IconButton onClick={() => handleEditClick(token)} aria-label={t("account_tokens_dialog_title_edit")}>
-                    <EditIcon />
-                  </IconButton>
-                  <IconButton onClick={() => handleDeleteClick(token)} aria-label={t("account_tokens_dialog_title_delete")}>
-                    <CloseIcon />
-                  </IconButton>
-                </>
-              )}
-              {token.token === session.token() && (
-                <Tooltip title={t("account_tokens_table_cannot_delete_or_edit")}>
-                  <span>
-                    <IconButton disabled>
-                      <EditIcon />
+        {tokens.map((token) => {
+          const hasLastAccess = Number.isFinite(token.last_access) && token.last_access > 0;
+          const hasLastOrigin = !!token.last_origin;
+
+          return (
+            <TableRow key={token.token} sx={{ "&:last-child td, &:last-child th": { border: 0 } }}>
+              <TableCell
+                component="th"
+                scope="row"
+                sx={{ paddingLeft: 0, whiteSpace: "nowrap" }}
+                aria-label={t("account_tokens_table_token_header")}
+              >
+                <span>
+                  <span style={{ fontFamily: "Monospace", fontSize: "0.9rem" }}>{token.token.slice(0, 12)}</span>
+                  ...
+                  <Tooltip title={t("common_copy_to_clipboard")} placement="right">
+                    <IconButton onClick={() => handleCopy(token.token)}>
+                      <ContentCopy />
                     </IconButton>
-                    <IconButton disabled>
-                      <CloseIcon />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-              )}
-            </TableCell>
-          </TableRow>
-        ))}
+                  </Tooltip>
+                </span>
+              </TableCell>
+              <TableCell aria-label={t("account_tokens_table_label_header")}>
+                {token.token === session.token() && <em>{t("account_tokens_table_current_session")}</em>}
+                {token.token !== session.token() && (token.label || "-")}
+              </TableCell>
+              <TableCell sx={{ whiteSpace: "nowrap" }} aria-label={t("account_tokens_table_expires_header")}>
+                {token.expires ? formatDateTime(token.expires, dateFormat, timeFormat) : <em>{t("account_tokens_table_never_expires")}</em>}
+              </TableCell>
+              <TableCell sx={{ whiteSpace: "nowrap" }} aria-label={t("account_tokens_table_last_access_header")}>
+                <div style={{ display: "flex", alignItems: "center" }}>
+                  {hasLastAccess ? <span>{formatDateTime(token.last_access, dateFormat, timeFormat)}</span> : <em>-</em>}
+                  {hasLastOrigin && (
+                    <Tooltip
+                      title={t("account_tokens_table_last_origin_tooltip", {
+                        ip: token.last_origin,
+                      })}
+                    >
+                      <IconButton onClick={() => openUrl(`https://whatismyipaddress.com/ip/${token.last_origin}`)}>
+                        <Public />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+                </div>
+              </TableCell>
+              <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+                {token.token !== session.token() && !token.provisioned && (
+                  <>
+                    <Tooltip title={t("account_tokens_dialog_title_edit")}>
+                      <IconButton onClick={() => handleEditClick(token)} aria-label={t("account_tokens_dialog_title_edit")}>
+                        <EditIcon />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title={t("account_tokens_dialog_title_delete")}>
+                      <IconButton onClick={() => handleDeleteClick(token)} aria-label={t("account_tokens_dialog_title_delete")}>
+                        <CloseIcon />
+                      </IconButton>
+                    </Tooltip>
+                  </>
+                )}
+                {token.token === session.token() && (
+                  <Tooltip title={t("account_tokens_table_cannot_delete_or_edit")}>
+                    <span>
+                      <IconButton disabled>
+                        <EditIcon />
+                      </IconButton>
+                      <IconButton disabled>
+                        <CloseIcon />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                )}
+                {token.provisioned && (
+                  <Tooltip title={t("account_tokens_table_cannot_delete_or_edit_provisioned_token")}>
+                    <span>
+                      <IconButton disabled>
+                        <EditIcon />
+                      </IconButton>
+                      <IconButton disabled>
+                        <CloseIcon />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                )}
+              </TableCell>
+            </TableRow>
+          );
+        })}
       </TableBody>
       <Portal>
         <Snackbar
@@ -1048,6 +1354,7 @@ const DeleteAccount = () => {
   const { t } = useTranslation();
   const [dialogKey, setDialogKey] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const { account } = useContext(AccountContext);
 
   const handleDialogOpen = () => {
     setDialogKey((prev) => prev + 1);
@@ -1061,9 +1368,19 @@ const DeleteAccount = () => {
   return (
     <Pref title={t("account_delete_title")} description={t("account_delete_description")}>
       <div>
-        <Button fullWidth={false} variant="outlined" color="error" startIcon={<DeleteOutlineIcon />} onClick={handleDialogOpen}>
-          {t("account_delete_title")}
-        </Button>
+        {!account?.provisioned ? (
+          <Button fullWidth={false} variant="outlined" color="error" startIcon={<DeleteOutlineIcon />} onClick={handleDialogOpen}>
+            {t("account_delete_title")}
+          </Button>
+        ) : (
+          <Tooltip title={t("account_basics_cannot_edit_or_delete_provisioned_user")}>
+            <span>
+              <Button fullWidth={false} variant="outlined" color="error" startIcon={<DeleteOutlineIcon />} disabled>
+                {t("account_delete_title")}
+              </Button>
+            </span>
+          </Tooltip>
+        )}
       </div>
       <DeleteAccountDialog key={`deleteAccountDialog${dialogKey}`} open={dialogOpen} onClose={handleDialogClose} />
     </Pref>
@@ -1083,7 +1400,7 @@ const DeleteAccountDialog = (props) => {
       await accountApi.delete(password);
       await db().delete();
       console.debug(`[Account] Account deleted`);
-      await session.resetAndRedirect(routes.app);
+      await session.resetAndRedirect(routes.app, { fade: true });
     } catch (e) {
       console.log(`[Account] Error deleting account`, e);
       if (e instanceof IncorrectPasswordError) {

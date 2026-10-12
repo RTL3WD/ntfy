@@ -5,8 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/emersion/go-smtp"
-	"github.com/microcosm-cc/bluemonday"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -18,6 +16,11 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/emersion/go-smtp"
+	"github.com/microcosm-cc/bluemonday"
+	"heckel.io/ntfy/v2/metrics"
+	"heckel.io/ntfy/v2/model"
 )
 
 var (
@@ -32,6 +35,7 @@ var (
 var (
 	onlySpacesRegex          = regexp.MustCompile(`(?m)^\s+$`)
 	consecutiveNewLinesRegex = regexp.MustCompile(`\n{3,}`)
+	htmlLineBreakRegex       = regexp.MustCompile(`(?i)<br\s*/?>`)
 )
 
 const (
@@ -70,15 +74,19 @@ func (b *smtpBackend) Counts() (total int64, success int64, failure int64) {
 
 // smtpSession is returned after EHLO.
 type smtpSession struct {
-	backend *smtpBackend
-	conn    *smtp.Conn
-	topic   string
-	token   string
-	mu      sync.Mutex
+	backend   *smtpBackend
+	conn      *smtp.Conn
+	topic     string
+	token     string // If email address contains token, e.g. topic+token@domain
+	basicAuth string // If SMTP AUTH PLAIN was used
+	mu        sync.Mutex
 }
 
-func (s *smtpSession) AuthPlain(username, _ string) error {
+func (s *smtpSession) AuthPlain(username, password string) error {
 	logem(s.conn).Field("smtp_username", username).Debug("AUTH PLAIN (with username %s)", username)
+	s.mu.Lock()
+	s.basicAuth = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", username, password)))
+	s.mu.Unlock()
 	return nil
 }
 
@@ -153,7 +161,7 @@ func (s *smtpSession) Data(r io.Reader) error {
 		if len(body) > conf.MessageSizeLimit {
 			body = body[:conf.MessageSizeLimit]
 		}
-		m := newDefaultMessage(s.topic, body)
+		m := model.NewDefaultMessage(s.topic, body)
 		subject := strings.TrimSpace(msg.Header.Get("Subject"))
 		if subject != "" {
 			dec := mime.WordDecoder{}
@@ -173,12 +181,12 @@ func (s *smtpSession) Data(r io.Reader) error {
 		s.backend.mu.Lock()
 		s.backend.success++
 		s.backend.mu.Unlock()
-		minc(metricEmailsReceivedSuccess)
+		metrics.EmailsReceivedSuccess.Inc()
 		return nil
 	})
 }
 
-func (s *smtpSession) publishMessage(m *message) error {
+func (s *smtpSession) publishMessage(m *model.Message) error {
 	// Extract remote address (for rate limiting)
 	remoteAddr, _, err := net.SplitHostPort(s.conn.Conn().RemoteAddr().String())
 	if err != nil {
@@ -187,17 +195,19 @@ func (s *smtpSession) publishMessage(m *message) error {
 	// Call HTTP handler with fake HTTP request
 	url := fmt.Sprintf("%s/%s", s.backend.config.BaseURL, m.Topic)
 	req, err := http.NewRequest("POST", url, strings.NewReader(m.Message))
-	req.RequestURI = "/" + m.Topic // just for the logs
-	req.RemoteAddr = remoteAddr    // rate limiting!!
-	req.Header.Set("X-Forwarded-For", remoteAddr)
 	if err != nil {
 		return err
 	}
+	req.RequestURI = "/" + m.Topic                                    // just for the logs
+	req.RemoteAddr = remoteAddr                                       // rate limiting!!
+	req.Header.Set(s.backend.config.ProxyForwardedHeader, remoteAddr) // Set X-Forwarded-For header
 	if m.Title != "" {
 		req.Header.Set("Title", m.Title)
 	}
 	if s.token != "" {
 		req.Header.Add("Authorization", "Bearer "+s.token)
+	} else if s.basicAuth != "" {
+		req.Header.Add("Authorization", "Basic "+s.basicAuth)
 	}
 	rr := httptest.NewRecorder()
 	s.backend.handler(rr, req)
@@ -214,6 +224,9 @@ func (s *smtpSession) Reset() {
 }
 
 func (s *smtpSession) Logout() error {
+	s.mu.Lock()
+	s.basicAuth = ""
+	s.mu.Unlock()
 	return nil
 }
 
@@ -226,7 +239,7 @@ func (s *smtpSession) withFailCount(fn func() error) error {
 		// We do not want to spam the log with WARN messages.
 		logem(s.conn).Err(err).Debug("Incoming mail error")
 		s.backend.failure++
-		minc(metricEmailsReceivedFailure)
+		metrics.EmailsReceivedFailure.Inc()
 	}
 	return err
 }
@@ -317,6 +330,9 @@ func readHTMLMailBody(reader io.Reader, transferEncoding string) (string, error)
 	if err != nil {
 		return "", err
 	}
+	// Convert <br> tags to newlines before stripping HTML, so that line breaks
+	// in HTML emails (e.g. from Synology DSM, and other appliances) are preserved.
+	body = htmlLineBreakRegex.ReplaceAllString(body, "\n")
 	stripped := bluemonday.
 		StrictPolicy().
 		AddSpaceWhenStrippingTag(true).

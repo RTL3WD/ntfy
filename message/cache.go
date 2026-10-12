@@ -1,0 +1,710 @@
+package message
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"net/netip"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"heckel.io/ntfy/v2/db"
+	"heckel.io/ntfy/v2/log"
+	"heckel.io/ntfy/v2/model"
+	"heckel.io/ntfy/v2/util"
+)
+
+const (
+	tagMessageCache = "message_cache"
+	schemaStore     = "message" // Store name in the schema_version table (see db/schema)
+
+	// NoLimit reads a topic's cached messages without a size budget.
+	NoLimit = 0
+
+	// closeFlushTimeout bounds how long Close waits for the last batch to be written. A batch
+	// write takes milliseconds, so this only ever trips when the database is wedged, and then
+	// shutdown must still finish well inside systemd's stop timeout.
+	closeFlushTimeout = 5 * time.Second
+
+	claimTimeout   = 2 * time.Minute // How long a claim hides a due message from other nodes; must exceed dispatching one claim
+	claimBatchSize = 1000            // Rows per claim, so the dispatch time that claimTimeout must cover is bounded
+
+	// queueBufferedBatches is how many full batches can wait for the batch writer before publishes
+	// block. 100 batches of the default 100 messages are ~10 MB typical, ~60 MB at the 4 KB limit.
+	// Every buffered batch must be written within closeFlushTimeout on shutdown.
+	queueBufferedBatches = 100
+
+	// insertMessageColumns is the number of values insertMessageArgs returns per message, which is
+	// the number of columns in each backend's INSERT statement
+	insertMessageColumns = 24
+)
+
+var errNoRows = errors.New("no rows found")
+
+// queries holds the database-specific SQL queries
+type queries struct {
+	insertMessages                   func(tx *sql.Tx, ms []*model.Message) error // Writes a batch of messages in as few statements as possible
+	selectScheduledMessageIDsBySeqID string
+	deleteScheduledBySequenceID      string
+	updateMessagesForTopicExpiry     string
+	selectMessagesByID               string
+	selectMessagesSinceTime          string
+	selectMessagesSinceTimeScheduled string
+	selectMessageRowID               string
+	selectMessagesSinceID            string
+	selectMessagesSinceIDScheduled   string
+	selectMessagesLatest             string
+	selectMessagesDue                string
+	claimMessagesDue                 string // Postgres-only: claims due rows and stamps claimed_at; empty for SQLite/mem
+	deleteExpiredMessages            string
+	updateMessagePublished           string
+	selectMessagesCount              string
+	selectTopics                     string
+	markExpiredAttachmentsDeleted    string
+	selectAttachmentsSizeBySender    string
+	selectAttachmentsSizeByUserID    string
+	selectAttachmentsWithSizes       string
+	selectStats                      string
+	updateStats                      string
+	updateMessageTime                string
+}
+
+// Cache stores published messages
+type Cache struct {
+	db      *db.DB
+	queue   *util.BatchingQueue[*model.Message]
+	written chan struct{} // Closed once the batch writer has drained the queue (after queue.Close)
+	nop     bool
+	mu      *sync.Mutex // nil for PostgreSQL (concurrent writes supported), set for SQLite (single writer)
+	queries queries
+	// claimTimeout is how long this node's claim on a due message holds off the others; it is a
+	// field only so tests can shorten it
+	claimTimeout time.Duration
+}
+
+func newCache(db *db.DB, queries queries, mu *sync.Mutex, batchSize int, batchTimeout time.Duration, nop bool) *Cache {
+	var queue *util.BatchingQueue[*model.Message]
+	if batchSize > 0 || batchTimeout > 0 {
+		queue = util.NewBatchingQueue[*model.Message](batchSize, batchTimeout, queueBufferedBatches)
+	}
+	c := &Cache{
+		db:           db,
+		queue:        queue,
+		written:      make(chan struct{}),
+		nop:          nop,
+		mu:           mu,
+		queries:      queries,
+		claimTimeout: claimTimeout,
+	}
+	go c.processMessageBatches()
+	return c
+}
+
+func (c *Cache) maybeLock() {
+	if c.mu != nil {
+		c.mu.Lock()
+	}
+}
+
+func (c *Cache) maybeUnlock() {
+	if c.mu != nil {
+		c.mu.Unlock()
+	}
+}
+
+// AddMessage stores a message to the message cache synchronously, or queues it to be stored at a later date asynchronously.
+// The message is queued only if "batchSize" or "batchTimeout" are passed to the constructor.
+func (c *Cache) AddMessage(m *model.Message) error {
+	if c.queue != nil {
+		c.queue.Enqueue(m)
+		return nil
+	}
+	return c.addMessages([]*model.Message{m})
+}
+
+// AddMessages synchronously stores a batch of messages to the message cache
+func (c *Cache) AddMessages(ms []*model.Message) error {
+	return c.addMessages(ms)
+}
+
+func (c *Cache) addMessages(ms []*model.Message) error {
+	c.maybeLock()
+	defer c.maybeUnlock()
+	if c.nop {
+		return nil
+	}
+	if len(ms) == 0 {
+		return nil
+	}
+	start := time.Now()
+	tx, err := c.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := c.queries.insertMessages(tx, ms); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		log.Tag(tagMessageCache).Err(err).Error("Writing %d message(s) failed (took %v)", len(ms), time.Since(start))
+		return err
+	}
+	log.Tag(tagMessageCache).Debug("Wrote %d message(s) in %v", len(ms), time.Since(start))
+	return nil
+}
+
+// insertMessageArgs returns the values of one message row, in the order of the columns in the
+// backends' INSERT statements (postgresInsertMessagesQuery, sqliteInsertMessagesQuery)
+func insertMessageArgs(m *model.Message) ([]any, error) {
+	if m.Event != model.MessageEvent && m.Event != model.MessageDeleteEvent && m.Event != model.MessageClearEvent {
+		return nil, model.ErrUnexpectedMessageType
+	}
+	published := m.Time <= time.Now().Unix()
+	tags := util.SanitizeUTF8(strings.Join(m.Tags, ","))
+	var attachmentName, attachmentType, attachmentURL string
+	var attachmentSize, attachmentExpires int64
+	var attachmentDeleted bool
+	if m.Attachment != nil {
+		attachmentName = util.SanitizeUTF8(m.Attachment.Name)
+		attachmentType = util.SanitizeUTF8(m.Attachment.Type)
+		attachmentSize = m.Attachment.Size
+		attachmentExpires = m.Attachment.Expires
+		attachmentURL = util.SanitizeUTF8(m.Attachment.URL)
+	}
+	var actionsStr string
+	if len(m.Actions) > 0 {
+		actionsBytes, err := json.Marshal(m.Actions)
+		if err != nil {
+			return nil, err
+		}
+		actionsStr = string(actionsBytes)
+	}
+	var sender string
+	if m.Sender.IsValid() {
+		sender = m.Sender.String()
+	}
+	return []any{
+		m.ID,
+		m.SequenceID,
+		m.Time,
+		m.Event,
+		m.Expires,
+		util.SanitizeUTF8(m.Topic),
+		util.SanitizeUTF8(m.Message),
+		util.SanitizeUTF8(m.Title),
+		m.Priority,
+		tags,
+		util.SanitizeUTF8(m.Click),
+		util.SanitizeUTF8(m.Icon),
+		actionsStr,
+		attachmentName,
+		attachmentType,
+		attachmentSize,
+		attachmentExpires,
+		attachmentURL,
+		attachmentDeleted, // Always zero
+		sender,
+		m.User,
+		util.SanitizeUTF8(m.ContentType),
+		m.Encoding,
+		published,
+	}, nil
+}
+
+// Messages returns all cached messages for a topic, oldest first. Prefer MessagesCapped on
+// request paths: an uncapped replay of a busy topic is as large as the topic's entire cache.
+func (c *Cache) Messages(topic string, since model.SinceMarker, scheduled bool) ([]*model.Message, error) {
+	messages, _, err := c.MessagesCapped(topic, since, scheduled, NoLimit)
+	return messages, err
+}
+
+// MessagesCapped returns cached messages for a topic, oldest first, keeping the newest messages
+// that fit in maxBytes worth of Message.Size (0 = no budget). The bool reports whether older messages
+// were dropped, so the caller can tell the client that what it got is incomplete.
+func (c *Cache) MessagesCapped(topic string, since model.SinceMarker, scheduled bool, maxBytes int64) ([]*model.Message, bool, error) {
+	if since.IsNone() {
+		return make([]*model.Message, 0), false, nil
+	} else if since.IsLatest() {
+		messages, err := c.messagesLatest(topic)
+		return messages, false, err
+	} else if since.IsID() {
+		return c.messagesSinceID(topic, since, scheduled, maxBytes)
+	}
+	return c.messagesSinceTime(topic, since, scheduled, maxBytes)
+}
+
+func (c *Cache) messagesSinceTime(topic string, since model.SinceMarker, scheduled bool, maxBytes int64) ([]*model.Message, bool, error) {
+	var rows *sql.Rows
+	var err error
+	rdb := c.db.ReadOnly()
+	if scheduled {
+		rows, err = rdb.Query(c.queries.selectMessagesSinceTimeScheduled, topic, since.Time().Unix())
+	} else {
+		rows, err = rdb.Query(c.queries.selectMessagesSinceTime, topic, since.Time().Unix())
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return readMessagesCapped(rows, maxBytes)
+}
+
+func (c *Cache) messagesSinceID(topic string, since model.SinceMarker, scheduled bool, maxBytes int64) ([]*model.Message, bool, error) {
+	rowID, err := c.resolveMessageRowID(since.ID())
+	if err != nil {
+		return nil, false, err
+	}
+	var rows *sql.Rows
+	rdb := c.db.ReadOnly()
+	if scheduled {
+		rows, err = rdb.Query(c.queries.selectMessagesSinceIDScheduled, topic, rowID)
+	} else {
+		rows, err = rdb.Query(c.queries.selectMessagesSinceID, topic, rowID)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return readMessagesCapped(rows, maxBytes)
+}
+
+// resolveMessageRowID resolves a since=<mid> marker to the row id used as the replay cut-off.
+// It asks the replica first and, only if the mid is unknown there, the primary: a client that
+// reconnects right after receiving a message can be ahead of replication, and without the retry
+// its unknown mid resolved to 0 and replayed the topic's entire retained history. A mid unknown
+// to the primary as well (e.g. expired) returns 0, which deliberately keeps that full replay.
+func (c *Cache) resolveMessageRowID(mid string) (int64, error) {
+	rdb := c.db.ReadOnly()
+	rowID, err := c.resolveMessageRowIDOn(rdb, mid)
+	if err != nil {
+		return 0, err
+	}
+	if rowID == 0 && rdb != c.db.Primary() {
+		return c.resolveMessageRowIDOn(c.db.Primary(), mid)
+	}
+	return rowID, nil
+}
+
+// resolveMessageRowIDOn looks the mid up on one database handle; 0 means unknown
+func (c *Cache) resolveMessageRowIDOn(h *sql.DB, mid string) (int64, error) {
+	var rowID int64
+	err := h.QueryRow(c.queries.selectMessageRowID, mid).Scan(&rowID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	} else if err != nil {
+		return 0, err
+	}
+	return rowID, nil
+}
+
+func (c *Cache) messagesLatest(topic string) ([]*model.Message, error) {
+	rows, err := c.db.ReadOnly().Query(c.queries.selectMessagesLatest, topic)
+	if err != nil {
+		return nil, err
+	}
+	return readMessages(rows)
+}
+
+// MessagesDue returns all messages that are due for publishing. On Postgres it CLAIMS them, so
+// every node may call it, leader or not: each row is handed to exactly one caller.
+func (c *Cache) MessagesDue() ([]*model.Message, error) {
+	if c.queries.claimMessagesDue != "" {
+		return c.claimMessagesDue()
+	}
+	rows, err := c.db.Query(c.queries.selectMessagesDue, time.Now().Unix())
+	if err != nil {
+		return nil, err
+	}
+	return readMessages(rows)
+}
+
+// claimMessagesDue stamps the due rows it takes, so concurrent senders on other nodes get
+// disjoint sets. The rows stay unpublished: MarkPublished still runs after delivery.
+func (c *Cache) claimMessagesDue() ([]*model.Message, error) {
+	now := time.Now().Unix()
+	rows, err := c.db.Query(c.queries.claimMessagesDue, now, now-int64(c.claimTimeout.Seconds()), claimBatchSize, now)
+	if err != nil {
+		return nil, err
+	}
+	return readMessages(rows) // Reads all rows and closes them
+}
+
+// SetClaimTimeoutForTest shortens the claim hold-off, so a test can see an abandoned claim
+// become claimable again without waiting out the real timeout.
+func (c *Cache) SetClaimTimeoutForTest(timeout time.Duration) {
+	c.claimTimeout = timeout
+}
+
+// DeleteExpiredMessages deletes up to `limit` expired messages in a single query
+// and returns the number of deleted rows.
+func (c *Cache) DeleteExpiredMessages(limit int) (int64, error) {
+	c.maybeLock()
+	defer c.maybeUnlock()
+	result, err := c.db.Exec(c.queries.deleteExpiredMessages, time.Now().Unix(), limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// Message returns the message with the given ID, or ErrMessageNotFound if not found
+func (c *Cache) Message(id string) (*model.Message, error) {
+	rows, err := c.db.ReadOnly().Query(c.queries.selectMessagesByID, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, model.ErrMessageNotFound
+	}
+	return readMessage(rows)
+}
+
+// UpdateMessageTime updates the time column for a message by ID. This is only used for testing.
+func (c *Cache) UpdateMessageTime(messageID string, timestamp int64) error {
+	c.maybeLock()
+	defer c.maybeUnlock()
+	_, err := c.db.Exec(c.queries.updateMessageTime, timestamp, messageID)
+	return err
+}
+
+// MarkPublished marks a message as published
+func (c *Cache) MarkPublished(m *model.Message) error {
+	c.maybeLock()
+	defer c.maybeUnlock()
+	_, err := c.db.Exec(c.queries.updateMessagePublished, m.ID)
+	return err
+}
+
+// MessagesCount returns the total number of messages in the cache. On Postgres, this is the
+// planner's estimate once the table has been analyzed, not an exact count.
+func (c *Cache) MessagesCount() (int, error) {
+	rows, err := c.db.ReadOnly().Query(c.queries.selectMessagesCount)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return 0, errNoRows
+	}
+	var count int
+	if err := rows.Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// Topics returns a list of all topics with messages in the cache
+func (c *Cache) Topics() ([]string, error) {
+	rows, err := c.db.ReadOnly().Query(c.queries.selectTopics)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return readStrings(rows)
+}
+
+// DeleteScheduledBySequenceID deletes unpublished (scheduled) messages with the given topic and sequence ID.
+// It returns the message IDs of the deleted messages, which can be used to clean up attachment files.
+func (c *Cache) DeleteScheduledBySequenceID(topic, sequenceID string) ([]string, error) {
+	c.maybeLock()
+	defer c.maybeUnlock()
+	return db.QueryTx(c.db, func(tx *sql.Tx) ([]string, error) {
+		rows, err := tx.Query(c.queries.selectScheduledMessageIDsBySeqID, topic, sequenceID)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		ids, err := readStrings(rows)
+		if err != nil {
+			return nil, err
+		}
+		rows.Close() // Close rows before executing delete in same transaction
+		if _, err := tx.Exec(c.queries.deleteScheduledBySequenceID, topic, sequenceID); err != nil {
+			return nil, err
+		}
+		return ids, nil
+	})
+}
+
+// ExpireMessages marks messages in the given topics as expired
+func (c *Cache) ExpireMessages(topics ...string) error {
+	c.maybeLock()
+	defer c.maybeUnlock()
+	return db.ExecTx(c.db, func(tx *sql.Tx) error {
+		for _, t := range topics {
+			if _, err := tx.Exec(c.queries.updateMessagesForTopicExpiry, time.Now().Unix()-1, t); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// MarkExpiredAttachmentsDeleted marks up to `limit` expired attachments as deleted in a single
+// query and returns the number of updated rows.
+func (c *Cache) MarkExpiredAttachmentsDeleted(limit int) (int64, error) {
+	c.maybeLock()
+	defer c.maybeUnlock()
+	result, err := c.db.Exec(c.queries.markExpiredAttachmentsDeleted, time.Now().Unix(), limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// AttachmentBytesUsedBySender returns the total size of active attachments sent by the given sender
+func (c *Cache) AttachmentBytesUsedBySender(sender string) (int64, error) {
+	rows, err := c.db.ReadOnly().Query(c.queries.selectAttachmentsSizeBySender, sender, time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	return c.readAttachmentBytesUsed(rows)
+}
+
+// AttachmentBytesUsedByUser returns the total size of active attachments for the given user
+func (c *Cache) AttachmentBytesUsedByUser(userID string) (int64, error) {
+	rows, err := c.db.ReadOnly().Query(c.queries.selectAttachmentsSizeByUserID, userID, time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	return c.readAttachmentBytesUsed(rows)
+}
+
+// AttachmentsWithSizes returns a map of message ID to attachment size for all active
+// (non-expired, non-deleted) attachments. This is used to hydrate the attachment store's
+// size tracking on startup and during periodic sync.
+func (c *Cache) AttachmentsWithSizes() (map[string]int64, error) {
+	rows, err := c.db.ReadOnly().Query(c.queries.selectAttachmentsWithSizes, time.Now().Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	attachments := make(map[string]int64)
+	for rows.Next() {
+		var id string
+		var size int64
+		if err := rows.Scan(&id, &size); err != nil {
+			return nil, err
+		}
+		attachments[id] = size
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return attachments, nil
+}
+
+func (c *Cache) readAttachmentBytesUsed(rows *sql.Rows) (int64, error) {
+	defer rows.Close()
+	var size int64
+	if !rows.Next() {
+		return 0, errors.New("no rows found")
+	}
+	if err := rows.Scan(&size); err != nil {
+		return 0, err
+	} else if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return size, nil
+}
+
+// UpdateStats updates the total message count statistic
+func (c *Cache) UpdateStats(messages int64) error {
+	c.maybeLock()
+	defer c.maybeUnlock()
+	_, err := c.db.Exec(c.queries.updateStats, messages)
+	return err
+}
+
+// Stats returns the total message count statistic
+func (c *Cache) Stats() (messages int64, err error) {
+	rows, err := c.db.ReadOnly().Query(c.queries.selectStats)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return 0, errNoRows
+	}
+	if err := rows.Scan(&messages); err != nil {
+		return 0, err
+	}
+	return messages, nil
+}
+
+// Close closes the underlying database connection
+// Close writes the messages still waiting in the batch queue, then closes the database. A
+// database that does not accept the last batch delays shutdown by at most closeFlushTimeout.
+func (c *Cache) Close() error {
+	if c.queue != nil {
+		flushed := make(chan struct{})
+		go func() {
+			c.queue.Close() // Hands the pending messages to the batch writer
+			<-c.written
+			close(flushed)
+		}()
+		select {
+		case <-flushed:
+		case <-time.After(closeFlushTimeout):
+			log.Tag(tagMessageCache).Warn("Giving up on the last message batch after %v", closeFlushTimeout)
+		}
+	}
+	return c.db.Close()
+}
+
+func (c *Cache) processMessageBatches() {
+	defer close(c.written)
+	if c.queue == nil {
+		return
+	}
+	for messages := range c.queue.Dequeue() {
+		if err := c.addMessages(messages); err != nil {
+			log.Tag(tagMessageCache).Err(err).Error("Cannot write message batch")
+		}
+	}
+}
+
+// readMessagesCapped reads a newest-first result set, keeping the newest messages that fit in
+// maxBytes worth of Message.Size (0 = no budget), and reverses them into the oldest-first
+// order callers expect. It stops scanning once the budget is spent rather than reading everything
+// and trimming, so a replay of a huge topic never materializes the whole cache. The bool reports
+// whether older messages were left behind.
+func readMessagesCapped(rows *sql.Rows, maxBytes int64) ([]*model.Message, bool, error) {
+	defer rows.Close()
+	messages := make([]*model.Message, 0)
+	truncated := false
+	var total int64
+	for rows.Next() {
+		m, err := readMessage(rows)
+		if err != nil {
+			return nil, false, err
+		}
+		if maxBytes > 0 {
+			size := int64(m.Size())
+			// Always return at least one message, even if it alone exceeds the budget: an empty
+			// reply is less useful than an oversized one, and the per-field limits bound how big it gets.
+			if len(messages) > 0 && total+size > maxBytes {
+				truncated = true
+				break
+			}
+			total += size
+		}
+		messages = append(messages, m)
+	}
+	if !truncated {
+		if err := rows.Err(); err != nil {
+			return nil, false, err
+		}
+	}
+	slices.Reverse(messages)
+	return messages, truncated, nil
+}
+
+func readMessages(rows *sql.Rows) ([]*model.Message, error) {
+	defer rows.Close()
+	messages := make([]*model.Message, 0)
+	for rows.Next() {
+		m, err := readMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
+func readMessage(rows *sql.Rows) (*model.Message, error) {
+	var timestamp, expires, attachmentSize, attachmentExpires int64
+	var priority int
+	var id, sequenceID, event, topic, msg, title, tagsStr, click, icon, actionsStr, attachmentName, attachmentType, attachmentURL, sender, user, contentType, encoding string
+	err := rows.Scan(
+		&id,
+		&sequenceID,
+		&timestamp,
+		&event,
+		&expires,
+		&topic,
+		&msg,
+		&title,
+		&priority,
+		&tagsStr,
+		&click,
+		&icon,
+		&actionsStr,
+		&attachmentName,
+		&attachmentType,
+		&attachmentSize,
+		&attachmentExpires,
+		&attachmentURL,
+		&sender,
+		&user,
+		&contentType,
+		&encoding,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var tags []string
+	if tagsStr != "" {
+		tags = strings.Split(tagsStr, ",")
+	}
+	var actions []*model.Action
+	if actionsStr != "" {
+		if err := json.Unmarshal([]byte(actionsStr), &actions); err != nil {
+			return nil, err
+		}
+	}
+	senderIP, err := netip.ParseAddr(sender)
+	if err != nil {
+		senderIP = netip.Addr{} // if no IP stored in database, return invalid address
+	}
+	var att *model.Attachment
+	if attachmentName != "" && attachmentURL != "" {
+		att = &model.Attachment{
+			Name:    attachmentName,
+			Type:    attachmentType,
+			Size:    attachmentSize,
+			Expires: attachmentExpires,
+			URL:     attachmentURL,
+		}
+	}
+	return &model.Message{
+		ID:          id,
+		SequenceID:  sequenceID,
+		Time:        timestamp,
+		Expires:     expires,
+		Event:       event,
+		Topic:       topic,
+		Message:     msg,
+		Title:       title,
+		Priority:    priority,
+		Tags:        tags,
+		Click:       click,
+		Icon:        icon,
+		Actions:     actions,
+		Attachment:  att,
+		Sender:      senderIP,
+		User:        user,
+		ContentType: contentType,
+		Encoding:    encoding,
+	}, nil
+}
+
+func readStrings(rows *sql.Rows) ([]string, error) {
+	strs := make([]string, 0)
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		strs = append(strs, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return strs, nil
+}

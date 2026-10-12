@@ -2,25 +2,25 @@ package util
 
 import (
 	"bytes"
+	crand "crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
-	"math/rand"
 	"net/netip"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
-
-	"golang.org/x/time/rate"
+	"unicode/utf8"
 
 	"github.com/gabriel-vasile/mimetype"
 	"golang.org/x/term"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -29,8 +29,6 @@ const (
 )
 
 var (
-	random             = rand.New(rand.NewSource(time.Now().UnixNano()))
-	randomMutex        = sync.Mutex{}
 	sizeStrRegex       = regexp.MustCompile(`(?i)^(\d+)([gmkb])?$`)
 	errInvalidPriority = errors.New("invalid priority")
 	noQuotesRegex      = regexp.MustCompile(`^[-_./:@a-zA-Z0-9]+$`)
@@ -50,12 +48,7 @@ func FileExists(filename string) bool {
 
 // Contains returns true if needle is contained in haystack
 func Contains[T comparable](haystack []T, needle T) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 // ContainsIP returns true if any one of the of prefixes contains the ip.
@@ -99,12 +92,38 @@ func SplitKV(s string, sep string) (key string, value string) {
 	return "", strings.TrimSpace(kv[0])
 }
 
-// LastString returns the last string in a slice, or def if s is empty
-func LastString(s []string, def string) string {
-	if len(s) == 0 {
-		return def
+// Map applies a function to each element of a slice and returns a new slice with the results
+// Example: Map([]int{1, 2, 3}, func(i int) int { return i * 2 }) -> []int{2, 4, 6}
+func Map[T any, U any](slice []T, f func(T) U) []U {
+	result := make([]U, len(slice))
+	for i, v := range slice {
+		result[i] = f(v)
 	}
-	return s[len(s)-1]
+	return result
+}
+
+// Filter returns a new slice containing only the elements of the original slice for which the
+// given function returns true.
+func Filter[T any](slice []T, f func(T) bool) []T {
+	result := make([]T, 0)
+	for _, v := range slice {
+		if f(v) {
+			result = append(result, v)
+		}
+	}
+	return result
+}
+
+// Find returns the first element in the slice that satisfies the given function, and a boolean indicating
+// whether such an element was found. If no element is found, it returns the zero value of T and false.
+func Find[T any](slice []T, f func(T) bool) (T, bool) {
+	for _, v := range slice {
+		if f(v) {
+			return v, true
+		}
+	}
+	var zero T
+	return zero, false
 }
 
 // RandomString returns a random string with a given length
@@ -122,14 +141,33 @@ func RandomLowerStringPrefix(prefix string, length int) string {
 	return randomStringPrefixWithCharset(prefix, length, randomStringLowerCaseCharset)
 }
 
+// randomStringPrefixWithCharset builds a random string from charset using crypto/rand.
+// We use rejection sampling (dropping the few highest byte values that would skew the
+// distribution) so every character is uniformly distributed -- important because these
+// strings back security tokens (access tokens, magic-link tokens, IDs), not just labels.
 func randomStringPrefixWithCharset(prefix string, length int, charset string) string {
-	randomMutex.Lock() // Who would have thought that random.Intn() is not thread-safe?!
-	defer randomMutex.Unlock()
-	b := make([]byte, length-len(prefix))
-	for i := range b {
-		b[i] = charset[random.Intn(len(charset))]
+	n := length - len(prefix)
+	if n <= 0 {
+		return prefix[:length]
 	}
-	return prefix + string(b)
+	result := make([]byte, n)
+	limit := 256 - (256 % len(charset)) // reject byte values >= limit to avoid modulo bias
+	buf := make([]byte, n)
+	for i := 0; i < n; {
+		if _, err := crand.Read(buf); err != nil {
+			panic("crypto/rand failed: " + err.Error()) // Should never happen on a sane system
+		}
+		for _, c := range buf {
+			if i >= n {
+				break
+			}
+			if int(c) < limit {
+				result[i] = charset[int(c)%len(charset)]
+				i++
+			}
+		}
+	}
+	return prefix + string(result)
 }
 
 // ValidRandomString returns true if the given string matches the format created by RandomString
@@ -321,6 +359,16 @@ func MaybeMarshalJSON(v any) string {
 	return string(jsonBytes)
 }
 
+// EncodeJSON writes the JSON encoding of v to w, without escaping HTML-significant
+// characters (<, >, &). Unlike the standard library's default, ntfy does not embed its
+// JSON responses in HTML, so escaping these characters only makes the raw output harder
+// to read (see #1511).
+func EncodeJSON(w io.Writer, v any) error {
+	encoder := json.NewEncoder(w)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(v)
+}
+
 // QuoteCommand combines a command array to a string, quoting arguments that need quoting.
 // This function is naive, and sometimes wrong. It is only meant for lo pretty-printing a command.
 //
@@ -412,4 +460,34 @@ func Int(v int) *int {
 // Time turns a time.Time into a pointer
 func Time(v time.Time) *time.Time {
 	return &v
+}
+
+// SanitizeUTF8 ensures a string is safe to store in PostgreSQL by handling two cases:
+//
+//  1. Invalid UTF-8 sequences: Some clients send Latin-1/ISO-8859-1 encoded text (e.g. accented
+//     characters like é, ñ, ß) in HTTP headers or SMTP messages. Go treats these as raw bytes in
+//     strings, but PostgreSQL rejects them. Any invalid UTF-8 byte is replaced with the Unicode
+//     replacement character (U+FFFD, "�") so the message is still delivered rather than lost.
+//
+//  2. NUL bytes (0x00): These are valid in UTF-8 but PostgreSQL TEXT columns reject them.
+//     They are stripped entirely.
+func SanitizeUTF8(s string) string {
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "\xef\xbf\xbd") // U+FFFD
+	}
+	if strings.ContainsRune(s, 0) {
+		s = strings.ReplaceAll(s, "\x00", "")
+	}
+	return s
+}
+
+// MaxTime returns the latest of the given times
+func MaxTime(times ...time.Time) time.Time {
+	var max time.Time
+	for _, t := range times {
+		if t.After(max) {
+			max = t
+		}
+	}
+	return max
 }

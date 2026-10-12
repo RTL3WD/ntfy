@@ -1,3 +1,5 @@
+//go:build !nofirebase
+
 package server
 
 import (
@@ -8,12 +10,17 @@ import (
 	"firebase.google.com/go/v4/messaging"
 	"fmt"
 	"google.golang.org/api/option"
+	"heckel.io/ntfy/v2/model"
 	"heckel.io/ntfy/v2/user"
 	"heckel.io/ntfy/v2/util"
 	"strings"
 )
 
 const (
+	// FirebaseAvailable is a constant used to indicate that Firebase support is available.
+	// It can be disabled with the 'nofirebase' build tag.
+	FirebaseAvailable = true
+
 	fcmMessageLimit         = 4000
 	fcmApnsBodyMessageLimit = 100
 )
@@ -37,7 +44,7 @@ func newFirebaseClient(sender firebaseSender, auther user.Auther) *firebaseClien
 	}
 }
 
-func (c *firebaseClient) Send(v *visitor, m *message) error {
+func (c *firebaseClient) Send(v *visitor, m *model.Message) error {
 	if !v.FirebaseAllowed() {
 		return errFirebaseTemporarilyBanned
 	}
@@ -50,7 +57,7 @@ func (c *firebaseClient) Send(v *visitor, m *message) error {
 		ev.Field("firebase_message", util.MaybeMarshalJSON(fbm)).Trace("Firebase message")
 	}
 	err = c.sender.Send(fbm)
-	if err == errFirebaseQuotaExceeded {
+	if errors.Is(err, errFirebaseQuotaExceeded) {
 		logvm(v, m).
 			Tag(tagFirebase).
 			Err(err).
@@ -73,8 +80,8 @@ type firebaseSenderImpl struct {
 	client *messaging.Client
 }
 
-func newFirebaseSender(credentialsFile string) (*firebaseSenderImpl, error) {
-	fb, err := firebase.NewApp(context.Background(), nil, option.WithCredentialsFile(credentialsFile))
+func newFirebaseSender(credentialsFile string) (firebaseSender, error) {
+	fb, err := firebase.NewApp(context.Background(), nil, option.WithAuthCredentialsFile(option.ServiceAccount, credentialsFile))
 	if err != nil {
 		return nil, err
 	}
@@ -115,11 +122,11 @@ func (c *firebaseSenderImpl) Send(m *messaging.Message) error {
 //     On Android, this will trigger the app to poll the topic and thereby displaying new messages.
 //   - If UpstreamBaseURL is set, messages are forwarded as poll requests to an upstream server and then forwarded
 //     to Firebase here. This is mainly for iOS to support self-hosted servers.
-func toFirebaseMessage(m *message, auther user.Auther) (*messaging.Message, error) {
+func toFirebaseMessage(m *model.Message, auther user.Auther) (*messaging.Message, error) {
 	var data map[string]string // Mostly matches https://ntfy.sh/docs/subscribe/api/#json-message-format
 	var apnsConfig *messaging.APNSConfig
 	switch m.Event {
-	case keepaliveEvent, openEvent:
+	case model.KeepaliveEvent, model.OpenEvent:
 		data = map[string]string{
 			"id":    m.ID,
 			"time":  fmt.Sprintf("%d", m.Time),
@@ -127,62 +134,71 @@ func toFirebaseMessage(m *message, auther user.Auther) (*messaging.Message, erro
 			"topic": m.Topic,
 		}
 		apnsConfig = createAPNSBackgroundConfig(data)
-	case pollRequestEvent:
+	case model.PollRequestEvent:
 		data = map[string]string{
 			"id":      m.ID,
 			"time":    fmt.Sprintf("%d", m.Time),
 			"event":   m.Event,
 			"topic":   m.Topic,
-			"message": m.Message,
+			"message": newMessageBody,
 			"poll_id": m.PollID,
 		}
 		apnsConfig = createAPNSAlertConfig(m, data)
-	case messageEvent:
-		allowForward := true
+	case model.MessageDeleteEvent, model.MessageClearEvent:
+		data = map[string]string{
+			"id":          m.ID,
+			"time":        fmt.Sprintf("%d", m.Time),
+			"event":       m.Event,
+			"topic":       m.Topic,
+			"sequence_id": m.SequenceID,
+		}
+		apnsConfig = createAPNSBackgroundConfig(data)
+	case model.MessageEvent:
 		if auther != nil {
-			allowForward = auther.Authorize(nil, m.Topic, user.PermissionRead) == nil
-		}
-		if allowForward {
-			data = map[string]string{
-				"id":           m.ID,
-				"time":         fmt.Sprintf("%d", m.Time),
-				"event":        m.Event,
-				"topic":        m.Topic,
-				"priority":     fmt.Sprintf("%d", m.Priority),
-				"tags":         strings.Join(m.Tags, ","),
-				"click":        m.Click,
-				"icon":         m.Icon,
-				"title":        m.Title,
-				"message":      m.Message,
-				"content_type": m.ContentType,
-				"encoding":     m.Encoding,
-			}
-			if len(m.Actions) > 0 {
-				actions, err := json.Marshal(m.Actions)
-				if err != nil {
-					return nil, err
-				}
-				data["actions"] = string(actions)
-			}
-			if m.Attachment != nil {
-				data["attachment_name"] = m.Attachment.Name
-				data["attachment_type"] = m.Attachment.Type
-				data["attachment_size"] = fmt.Sprintf("%d", m.Attachment.Size)
-				data["attachment_expires"] = fmt.Sprintf("%d", m.Attachment.Expires)
-				data["attachment_url"] = m.Attachment.URL
-			}
-			apnsConfig = createAPNSAlertConfig(m, data)
-		} else {
-			// If anonymous read for a topic is not allowed, we cannot send the message along
+			// If "anonymous read" for a topic is not allowed, we cannot send the message along
 			// via Firebase. Instead, we send a "poll_request" message, asking the client to poll.
-			data = map[string]string{
-				"id":    m.ID,
-				"time":  fmt.Sprintf("%d", m.Time),
-				"event": pollRequestEvent,
-				"topic": m.Topic,
+			//
+			// The data map needs to contain all the fields for it to function properly. If not all
+			// fields are set, the iOS app fails to decode the message.
+			//
+			// See https://github.com/binwiederhier/ntfy/pull/1345
+			if err := auther.Authorize(nil, m.Topic, user.PermissionRead); err != nil {
+				m = toPollRequest(m)
 			}
-			// TODO Handle APNS?
 		}
+		data = map[string]string{
+			"id":           m.ID,
+			"time":         fmt.Sprintf("%d", m.Time),
+			"event":        m.Event,
+			"topic":        m.Topic,
+			"sequence_id":  m.SequenceID,
+			"priority":     fmt.Sprintf("%d", m.Priority),
+			"tags":         strings.Join(m.Tags, ","),
+			"click":        m.Click,
+			"icon":         m.Icon,
+			"title":        m.Title,
+			"message":      m.Message,
+			"content_type": m.ContentType,
+			"encoding":     m.Encoding,
+		}
+		if len(m.Actions) > 0 {
+			actions, err := json.Marshal(m.Actions)
+			if err != nil {
+				return nil, err
+			}
+			data["actions"] = string(actions)
+		}
+		if m.Attachment != nil {
+			data["attachment_name"] = m.Attachment.Name
+			data["attachment_type"] = m.Attachment.Type
+			data["attachment_size"] = fmt.Sprintf("%d", m.Attachment.Size)
+			data["attachment_expires"] = fmt.Sprintf("%d", m.Attachment.Expires)
+			data["attachment_url"] = m.Attachment.URL
+		}
+		if m.PollID != "" {
+			data["poll_id"] = m.PollID
+		}
+		apnsConfig = createAPNSAlertConfig(m, data)
 	}
 	var androidConfig *messaging.AndroidConfig
 	if m.Priority >= 4 {
@@ -220,7 +236,7 @@ func maybeTruncateFCMMessage(m *messaging.Message) *messaging.Message {
 // createAPNSAlertConfig creates an APNS config for iOS notifications that show up as an alert (only relevant for iOS).
 // We must set the Alert struct ("alert"), and we need to set MutableContent ("mutable-content"), so the Notification Service
 // Extension in iOS can modify the message.
-func createAPNSAlertConfig(m *message, data map[string]string) *messaging.APNSConfig {
+func createAPNSAlertConfig(m *model.Message, data map[string]string) *messaging.APNSConfig {
 	apnsData := make(map[string]any)
 	for k, v := range data {
 		apnsData[k] = v
@@ -275,4 +291,18 @@ func maybeTruncateAPNSBodyMessage(s string) string {
 		return s[:len(s)-over] + "..."
 	}
 	return s
+}
+
+// toPollRequest converts a message to a poll request message.
+//
+// This empties all the fields that are not needed for a poll request and just sets the required fields,
+// most importantly, the PollID.
+func toPollRequest(m *model.Message) *model.Message {
+	pr := model.NewPollRequestMessage(m.Topic, m.ID)
+	pr.ID = m.ID
+	pr.Time = m.Time
+	pr.Priority = m.Priority // Keep priority
+	pr.ContentType = m.ContentType
+	pr.Encoding = m.Encoding
+	return pr
 }

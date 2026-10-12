@@ -1,4 +1,5 @@
 import Dexie from "dexie";
+import { fadeOut } from "./transition";
 
 /**
  * Manages the logged-in user's session and access token.
@@ -36,12 +37,18 @@ class Session {
     await this.db.kv.bulkPut([
       { key: "user", value: username },
       { key: "token", value: token },
+      { key: "lastExtendedAt", value: Date.now() },
     ]);
     localStorage.setItem("user", username);
     localStorage.setItem("token", token);
   }
 
-  async resetAndRedirect(url) {
+  async resetAndRedirect(url, { fade = false } = {}) {
+    // User-initiated exits (logout, account deletion) fade out first, while data's intact, so the
+    // wipe + reload doesn't flash a broken UI. Error redirects pass no options and cut straight through.
+    if (fade) {
+      await fadeOut();
+    }
     await this.db.delete();
     localStorage.removeItem("user");
     localStorage.removeItem("token");
@@ -50,6 +57,18 @@ class Session {
 
   async usernameAsync() {
     return (await this.db.kv.get({ key: "user" }))?.value;
+  }
+
+  async tokenAsync() {
+    return (await this.db.kv.get({ key: "token" }))?.value;
+  }
+
+  async lastExtendedAtAsync() {
+    return (await this.db.kv.get({ key: "lastExtendedAt" }))?.value;
+  }
+
+  async setLastExtendedAtAsync() {
+    await this.db.kv.put({ key: "lastExtendedAt", value: Date.now() });
   }
 
   exists() {

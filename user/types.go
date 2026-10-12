@@ -2,27 +2,28 @@ package user
 
 import (
 	"errors"
-	"github.com/stripe/stripe-go/v74"
-	"heckel.io/ntfy/v2/log"
 	"net/netip"
-	"regexp"
 	"strings"
 	"time"
+
+	"heckel.io/ntfy/v2/log"
+	"heckel.io/ntfy/v2/payments"
 )
 
 // User is a struct that represents a user
 type User struct {
-	ID        string
-	Name      string
-	Hash      string // password hash (bcrypt)
-	Token     string // Only set if token was used to log in
-	Role      Role
-	Prefs     *Prefs
-	Tier      *Tier
-	Stats     *Stats
-	Billing   *Billing
-	SyncTopic string
-	Deleted   bool
+	ID          string
+	Name        string
+	Hash        string // Password hash (bcrypt)
+	Token       string // Only set if token was used to log in
+	Role        Role
+	Prefs       *Prefs
+	Tier        *Tier
+	Stats       *Stats
+	Billing     *Billing
+	SyncTopic   string
+	Provisioned bool // Whether the user was provisioned by the config file
+	Deleted     bool // Whether the user was soft-deleted
 }
 
 // TierID returns the ID of the User.Tier, or an empty string if the user has no tier,
@@ -46,10 +47,10 @@ func (u *User) IsUser() bool {
 
 // Auther is an interface for authentication and authorization
 type Auther interface {
-	// Authenticate checks username and password and returns a user if correct. The method
-	// returns in constant-ish time, regardless of whether the user exists or the password is
-	// correct or incorrect.
-	Authenticate(username, password string) (*User, error)
+	// Authenticate checks a login identifier (username or verified primary email) and password
+	// and returns a user if correct. The method returns in constant-ish time, regardless of
+	// whether the identifier exists or the password is correct or incorrect.
+	Authenticate(identifier, password string) (*User, error)
 
 	// Authorize returns nil if the given user has access to the given topic using the desired
 	// permission. The user param may be nil to signal an anonymous user.
@@ -58,11 +59,12 @@ type Auther interface {
 
 // Token represents a user token, including expiry date
 type Token struct {
-	Value      string
-	Label      string
-	LastAccess time.Time
-	LastOrigin netip.Addr
-	Expires    time.Time
+	Value       string
+	Label       string
+	LastAccess  time.Time
+	LastOrigin  netip.Addr
+	Expires     time.Time
+	Provisioned bool
 }
 
 // TokenUpdate holds information about the last access time and origin IP address of a token
@@ -71,9 +73,32 @@ type TokenUpdate struct {
 	LastOrigin netip.Addr
 }
 
+// MagicLinkKind discriminates the two link-token flows stored in the user_magic_link table.
+type MagicLinkKind string
+
+// Magic link kinds
+const (
+	MagicLinkKindEmailVerify   MagicLinkKind = "email_verify"
+	MagicLinkKindPasswordReset MagicLinkKind = "password_reset"
+)
+
+// MagicLink is a pending, single-use link token -- either an email verification or a
+// password reset, distinguished by Kind. The raw token travels in the emailed link;
+// only its TokenHash (hex SHA-256) is persisted.
+type MagicLink struct {
+	TokenHash string
+	Kind      MagicLinkKind
+	UserID    string
+	Email     string // Address being verified for email_verify; empty (NULL) for password_reset
+	Expires   int64
+	Created   int64
+}
+
 // Prefs represents a user's configuration settings
 type Prefs struct {
 	Language      *string            `json:"language,omitempty"`
+	DateFormat    *string            `json:"date_format,omitempty"`
+	TimeFormat    *string            `json:"time_format,omitempty"`
 	Notification  *NotificationPrefs `json:"notification,omitempty"`
 	Subscriptions []*Subscription    `json:"subscriptions,omitempty"`
 }
@@ -139,8 +164,8 @@ type Stats struct {
 type Billing struct {
 	StripeCustomerID            string
 	StripeSubscriptionID        string
-	StripeSubscriptionStatus    stripe.SubscriptionStatus
-	StripeSubscriptionInterval  stripe.PriceRecurringInterval
+	StripeSubscriptionStatus    payments.SubscriptionStatus
+	StripeSubscriptionInterval  payments.PriceRecurringInterval
 	StripeSubscriptionPaidUntil time.Time
 	StripeSubscriptionCancelAt  time.Time
 }
@@ -148,7 +173,8 @@ type Billing struct {
 // Grant is a struct that represents an access control entry to a topic by a user
 type Grant struct {
 	TopicPattern string // May include wildcard (*)
-	Allow        Permission
+	Permission   Permission
+	Provisioned  bool // Whether the grant was provisioned by the config file
 }
 
 // Reservation is a struct that represents the ownership over a topic by a user
@@ -156,6 +182,36 @@ type Reservation struct {
 	Topic    string
 	Owner    Permission
 	Everyone Permission
+}
+
+// Email is a verified email address on a user account, along with whether it is the user's
+// designated primary (recovery) address.
+type Email struct {
+	Address string
+	Primary bool
+}
+
+// Emails is a list of verified email addresses for a user.
+type Emails []*Email
+
+// Strings returns just the address strings, in the same order. It is a convenience for callers
+// that only care about the addresses and not the primary flag.
+func (e Emails) Strings() []string {
+	addresses := make([]string, len(e))
+	for i, email := range e {
+		addresses[i] = email.Address
+	}
+	return addresses
+}
+
+// Contains reports whether the given address is in the list.
+func (e Emails) Contains(address string) bool {
+	for _, email := range e {
+		if email.Address == address {
+			return true
+		}
+	}
+	return false
 }
 
 // Permission represents a read or write permission to a topic
@@ -240,48 +296,135 @@ const (
 	everyoneID = "u_everyone"
 )
 
-var (
-	allowedUsernameRegex     = regexp.MustCompile(`^[-_.+@a-zA-Z0-9]+$`)    // Does not include Everyone (*)
-	allowedTopicRegex        = regexp.MustCompile(`^[-_A-Za-z0-9]{1,64}$`)  // No '*'
-	allowedTopicPatternRegex = regexp.MustCompile(`^[-_*A-Za-z0-9]{1,64}$`) // Adds '*' for wildcards!
-	allowedTierRegex         = regexp.MustCompile(`^[-_A-Za-z0-9]{1,64}$`)
-)
-
-// AllowedRole returns true if the given role can be used for new users
-func AllowedRole(role Role) bool {
-	return role == RoleUser || role == RoleAdmin
-}
-
-// AllowedUsername returns true if the given username is valid
-func AllowedUsername(username string) bool {
-	return allowedUsernameRegex.MatchString(username)
-}
-
-// AllowedTopic returns true if the given topic name is valid
-func AllowedTopic(topic string) bool {
-	return allowedTopicRegex.MatchString(topic)
-}
-
-// AllowedTopicPattern returns true if the given topic pattern is valid; this includes the wildcard character (*)
-func AllowedTopicPattern(topic string) bool {
-	return allowedTopicPatternRegex.MatchString(topic)
-}
-
-// AllowedTier returns true if the given tier name is valid
-func AllowedTier(tier string) bool {
-	return allowedTierRegex.MatchString(tier)
+// Config holds the configuration for the user Manager
+type Config struct {
+	Filename                     string              // Database filename, e.g. "/var/lib/ntfy/user.db" (SQLite)
+	DatabaseURL                  string              // Database connection string (PostgreSQL)
+	StartupQueries               string              // Queries to run on startup, e.g. to create initial users or tiers (SQLite only)
+	DefaultAccess                Permission          // Default permission if no ACL matches
+	ProvisionEnabled             bool                // Hack: Enable auto-provisioning of users and access grants, disabled for "ntfy user" commands
+	Users                        []*User             // Predefined users to create on startup
+	Access                       map[string][]*Grant // Predefined access grants to create on startup (username -> []*Grant)
+	Tokens                       map[string][]*Token // Predefined users to create on startup (username -> []*Token)
+	QueueWriterInterval          time.Duration       // Interval for the async queue writer to flush stats and token updates to the database
+	BcryptCost                   int                 // Cost of generated passwords; lowering makes testing faster
+	AccessCacheEnabled           bool                // Enables the in-memory ACL cache (high volume servers only)
+	AccessCacheReloadInterval    time.Duration       // Reload interval for access cache, relevant for ACL writes from CLI
+	ExpiredMagicLinkReapInterval time.Duration       // Interval for sweeping expired email-verify/password-reset links
 }
 
 // Error constants used by the package
 var (
-	ErrUnauthenticated     = errors.New("unauthenticated")
-	ErrUnauthorized        = errors.New("unauthorized")
-	ErrInvalidArgument     = errors.New("invalid argument")
-	ErrUserNotFound        = errors.New("user not found")
-	ErrUserExists          = errors.New("user already exists")
-	ErrTierNotFound        = errors.New("tier not found")
-	ErrTokenNotFound       = errors.New("token not found")
-	ErrPhoneNumberNotFound = errors.New("phone number not found")
-	ErrTooManyReservations = errors.New("new tier has lower reservation limit")
-	ErrPhoneNumberExists   = errors.New("phone number already exists")
+	ErrUnauthenticated        = errors.New("unauthenticated")
+	ErrUnauthorized           = errors.New("unauthorized")
+	ErrInvalidArgument        = errors.New("invalid argument")
+	ErrUserNotFound           = errors.New("user not found")
+	ErrUserExists             = errors.New("user already exists")
+	ErrPasswordHashInvalid    = errors.New("password hash must be a bcrypt hash, use 'ntfy user hash' to generate")
+	ErrPasswordHashWeak       = errors.New("password hash too weak, use 'ntfy user hash' to generate")
+	ErrTierNotFound           = errors.New("tier not found")
+	ErrTokenNotFound          = errors.New("token not found")
+	ErrPhoneNumberNotFound    = errors.New("phone number not found")
+	ErrTooManyReservations    = errors.New("new tier has lower reservation limit")
+	ErrPhoneNumberExists      = errors.New("phone number already exists")
+	ErrEmailNotFound          = errors.New("email not found")
+	ErrEmailExists            = errors.New("email already exists")
+	ErrEmailPrimaryElsewhere  = errors.New("email is the primary email on another account")
+	ErrMagicLinkNotFound      = errors.New("magic link not found")
+	ErrProvisionedUserChange  = errors.New("cannot change or delete provisioned user")
+	ErrProvisionedTokenChange = errors.New("cannot change or delete provisioned token")
 )
+
+// queries holds the database-specific SQL queries
+type queries struct {
+	// User queries
+	selectUserByID                 string
+	selectUserByName               string
+	selectUserByNameOrPrimaryEmail string
+	selectUserByToken              string
+	selectUserByStripeCustomerID   string
+	selectUsernames                string
+	selectUsers                    string
+	selectUserCount                string
+	selectUserIDFromUsername       string
+	insertUser                     string
+	updateUserPass                 string
+	updateUserRole                 string
+	updateUserProvisioned          string
+	updateUserPrefs                string
+	updateUserStats                string
+	updateUserStatsResetAll        string
+	updateUserTier                 string
+	updateUserDeleted              string
+	deleteUser                     string
+	deleteUserTier                 string
+	deleteUsersMarked              string
+	deleteUsersProvisioned         string
+
+	// Access queries
+	selectTopicPerms            string             // Direct-DB authorizeTopicAccess query; used when the in-memory cache is disabled
+	selectAccessCacheAll        string             // Bulk load: (user_name, topic, read, write) for the in-memory ACL cache
+	selectAccessCacheUsers      func(n int) string // Returns a per-users load query whose IN clause is sized for n usernames
+	selectUserAllAccess         string
+	selectUserAccess            string
+	selectUserReservations      string
+	selectUserReservationsCount string
+	selectUserReservationsOwner string
+	selectUserHasReservation    string
+	selectOtherAccessCount      string
+	upsertUserAccess            string
+	deleteUserAccess            string
+	deleteUserAccessProvisioned string
+	deleteTopicAccess           string
+	deleteAllAccess             string
+
+	// Token queries
+	selectToken                string
+	selectTokens               string
+	selectTokenCount           string
+	selectAllProvisionedTokens string
+	upsertToken                string
+	updateToken                string
+	updateTokenLastAccess      string
+	deleteToken                string
+	deleteProvisionedToken     string
+	deleteAllProvisionedTokens string
+	deleteAllToken             string
+	deleteExpiredTokens        string
+	deleteExcessTokens         string
+
+	// Tier queries
+	insertTier          string
+	selectTiers         string
+	selectTierByCode    string
+	selectTierByPriceID string
+	updateTier          string
+	deleteTier          string
+
+	// Phone queries
+	selectPhoneNumbers string
+	insertPhoneNumber  string
+	deletePhoneNumber  string
+
+	// Email queries
+	selectEmails            string
+	insertEmail             string
+	insertEmailIgnore       string // Idempotent insert (ON CONFLICT DO NOTHING) used inside VerifyEmail
+	deleteEmail             string
+	selectPrimaryEmail      string
+	selectUserIDByPrimary   string
+	updateEmailSetPrimary   string
+	updateEmailClearPrimary string
+
+	// Magic link queries (email verification + password reset)
+	insertMagicLink              string
+	selectMagicLinkByHash        string
+	deleteMagicLinkByHash        string
+	deleteMagicLinkEmailVerify   string // Delete pending email_verify rows for (user_id, email)
+	deleteMagicLinkResetPassword string // Delete the active password_reset row for user_id
+	selectPendingEmails          string // Pending (unverified) email addresses for a user
+	deleteExpiredMagicLinks      string
+
+	// Billing queries
+	updateBilling string
+}

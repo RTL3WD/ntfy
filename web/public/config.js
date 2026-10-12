@@ -9,6 +9,7 @@ var config = {
   base_url: window.location.origin, // Change to test against a different server
   app_root: "/",
   enable_login: true,
+  require_login: false,
   enable_signup: true,
   enable_payments: false,
   enable_reservations: true,
@@ -18,4 +19,5 @@ var config = {
   billing_contact: "",
   web_push_public_key: "",
   disallowed_topics: ["docs", "static", "file", "app", "account", "settings", "signup", "login", "v1"],
+  config_hash: "dev", // Placeholder for development; actual value is generated server-side
 };

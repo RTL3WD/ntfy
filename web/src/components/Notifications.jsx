@@ -17,19 +17,18 @@ import {
   Button,
 } from "@mui/material";
 import * as React from "react";
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
-import { useLiveQuery } from "dexie-react-hooks";
 import InfiniteScroll from "react-infinite-scroll-component";
 import { Trans, useTranslation } from "react-i18next";
 import { useOutletContext } from "react-router-dom";
-import { useRemark } from "react-remark";
-import styled from "@emotion/styled";
-import { formatBytes, formatShortDateTime, maybeActionErrors, openUrl, shortUrl, topicShortUrl, unmatchedTags } from "../app/utils";
+import { copyToClipboard, formatBytes, formatDateTime, maybeActionErrors, openUrl, shortUrl, topicUrl, unmatchedTags } from "../app/utils";
+import { ACTION_BROADCAST, ACTION_COPY, ACTION_HTTP, ACTION_VIEW } from "../app/actions";
 import { formatMessage, formatTitle, isImage } from "../app/notificationUtils";
 import { LightboxBackdrop, Paragraph, VerticallyCenteredContainer } from "./styles";
 import subscriptionManager from "../app/SubscriptionManager";
+import notifier from "../app/Notifier";
 import priority1 from "../img/priority-1.svg";
 import priority2 from "../img/priority-2.svg";
 import priority4 from "../img/priority-4.svg";
@@ -37,6 +36,7 @@ import priority5 from "../img/priority-5.svg";
 import logoOutline from "../img/ntfy-outline.svg";
 import AttachmentIcon from "./AttachmentIcon";
 import { useAutoSubscribe } from "./hooks";
+import { usePrefCache } from "./PrefCache";
 
 const priorityFiles = {
   1: priority1,
@@ -46,28 +46,25 @@ const priorityFiles = {
 };
 
 export const AllSubscriptions = () => {
-  const { subscriptions } = useOutletContext();
-  if (!subscriptions) {
-    return <Loading />;
+  // allNotifications is preloaded in Layout, so this view has its data on mount (no empty frame on switch).
+  const { subscriptions, allNotifications } = useOutletContext();
+  if (!subscriptions || allNotifications === null || allNotifications === undefined) {
+    return <DeferredLoading />;
   }
-  return <AllSubscriptionsList subscriptions={subscriptions} />;
+  return <AllSubscriptionsList subscriptions={subscriptions} notifications={allNotifications} />;
 };
 
 export const SingleSubscription = () => {
-  const { subscriptions, selected } = useOutletContext();
+  const { subscriptions, selected, allNotifications } = useOutletContext();
   useAutoSubscribe(subscriptions, selected);
-  if (!selected) {
-    return <Loading />;
+  if (!selected || allNotifications === null || allNotifications === undefined) {
+    return <DeferredLoading />;
   }
-  return <SingleSubscriptionList subscription={selected} />;
+  return <SingleSubscriptionList subscription={selected} allNotifications={allNotifications} />;
 };
 
 const AllSubscriptionsList = (props) => {
-  const { subscriptions } = props;
-  const notifications = useLiveQuery(() => subscriptionManager.getAllNotifications(), []);
-  if (notifications === null || notifications === undefined) {
-    return <Loading />;
-  }
+  const { subscriptions, notifications } = props;
   if (subscriptions.length === 0) {
     return <NoSubscriptions />;
   }
@@ -78,11 +75,13 @@ const AllSubscriptionsList = (props) => {
 };
 
 const SingleSubscriptionList = (props) => {
-  const { subscription } = props;
-  const notifications = useLiveQuery(() => subscriptionManager.getNotifications(subscription.id), [subscription]);
-  if (notifications === null || notifications === undefined) {
-    return <Loading />;
-  }
+  const { subscription, allNotifications } = props;
+  // Filter the preloaded allNotifications instead of a per-topic query (getNotifications(id) ==
+  // getAllNotifications() filtered by id), so topic switches are instant.
+  const notifications = useMemo(
+    () => allNotifications.filter((notification) => notification.subscriptionId === subscription.id),
+    [allNotifications, subscription.id],
+  );
   if (notifications.length === 0) {
     return <NoNotifications subscription={subscription} />;
   }
@@ -105,7 +104,7 @@ const NotificationList = (props) => {
         main.scrollTo(0, 0);
       }
     },
-    [props.id]
+    [props.id],
   );
 
   return (
@@ -153,7 +152,7 @@ const autolink = (s) => {
   const parts = s.split(/(\bhttps?:\/\/[-A-Z0-9+\u0026\u2019@#/%?=()~_|!:,.;]*[-A-Z0-9+\u0026@#/%=~()_|]\b)/gi);
   for (let i = 1; i < parts.length; i += 2) {
     parts[i] = (
-      <Link key={i} href={parts[i]} underline="hover" target="_blank" rel="noreferrer,noopener">
+      <Link key={i} href={parts[i]} underline="hover" target="_blank" rel="noreferrer">
         {shortUrl(parts[i])}
       </Link>
     );
@@ -161,72 +160,29 @@ const autolink = (s) => {
   return <>{parts}</>;
 };
 
-const MarkdownContainer = styled("div")`
-  line-height: 1;
-
-  h1,
-  h2,
-  h3,
-  h4,
-  h5,
-  h6,
-  p,
-  pre,
-  ul,
-  ol,
-  blockquote {
-    margin: 0;
-  }
-
-  p {
-    line-height: 1.2;
-  }
-
-  blockquote,
-  pre {
-    border-radius: 3px;
-    background: ${(props) => (props.theme.palette.mode === "light" ? "#f5f5f5" : "#333")};
-  }
-
-  pre {
-    padding: 0.9rem;
-  }
-
-  ul,
-  ol,
-  blockquote {
-    padding-inline: 1rem;
-  }
-
-  img {
-    max-width: 100%;
-  }
-`;
-
-const MarkdownContent = ({ content }) => {
-  const [reactContent, setMarkdownSource] = useRemark();
-
-  useEffect(() => {
-    setMarkdownSource(content);
-  }, [content]);
-
-  return <MarkdownContainer>{reactContent}</MarkdownContainer>;
-};
+// Loaded lazily so the heavy react-remark/unified markdown stack is only fetched when a
+// text/markdown notification is actually rendered (see MarkdownContent.jsx).
+const MarkdownContent = lazy(() => import("./MarkdownContent"));
 
 const NotificationBody = ({ notification }) => {
   const displayAsMarkdown = notification.content_type === "text/markdown";
   const formatted = formatMessage(notification);
   if (displayAsMarkdown) {
-    return <MarkdownContent content={formatted} />;
+    return (
+      <Suspense fallback={null}>
+        <MarkdownContent content={formatted} />
+      </Suspense>
+    );
   }
   return autolink(formatted);
 };
 
 const NotificationItem = (props) => {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
+  const { dateFormat, timeFormat } = usePrefCache();
   const { notification } = props;
   const { attachment } = notification;
-  const date = formatShortDateTime(notification.time, i18n.language);
+  const date = formatDateTime(notification.time, dateFormat, timeFormat);
   const otherTags = unmatchedTags(notification.tags);
   const tags = otherTags.length > 0 ? otherTags.join(", ") : null;
   const handleDelete = async () => {
@@ -238,7 +194,7 @@ const NotificationItem = (props) => {
     await subscriptionManager.markNotificationRead(notification.id);
   };
   const handleCopy = (s) => {
-    navigator.clipboard.writeText(s);
+    copyToClipboard(s);
     props.onShowSnack();
   };
   const expired = attachment && attachment.expires && attachment.expires < Date.now() / 1000;
@@ -293,7 +249,7 @@ const NotificationItem = (props) => {
             {formatTitle(notification)}
           </Typography>
         )}
-        <Typography variant="body1" sx={{ whiteSpace: "pre-line" }}>
+        <Typography variant="body1" sx={{ whiteSpace: "pre-line", overflowX: "auto" }}>
           <NotificationBody notification={notification} />
           {maybeActionErrors(notification)}
         </Typography>
@@ -334,7 +290,7 @@ const NotificationItem = (props) => {
               </Tooltip>
             </>
           )}
-          {hasUserActions && <UserActions notification={notification} />}
+          {hasUserActions && <UserActions notification={notification} onShowSnack={props.onShowSnack} />}
         </CardActions>
       )}
     </Card>
@@ -342,7 +298,8 @@ const NotificationItem = (props) => {
 };
 
 const Attachment = (props) => {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
+  const { dateFormat, timeFormat } = usePrefCache();
   const { attachment } = props;
   const expired = attachment.expires && attachment.expires < Date.now() / 1000;
   const expires = attachment.expires && attachment.expires > Date.now() / 1000;
@@ -361,8 +318,8 @@ const Attachment = (props) => {
   if (expires) {
     infos.push(
       t("notifications_attachment_link_expires", {
-        date: formatShortDateTime(attachment.expires, i18n.language),
-      })
+        date: formatDateTime(attachment.expires, dateFormat, timeFormat),
+      }),
     );
   }
   if (expired) {
@@ -450,7 +407,7 @@ const Image = (props) => {
           cursor: "pointer",
         }}
       />
-      <Modal open={open} onClose={() => setOpen(false)} BackdropComponent={LightboxBackdrop}>
+      <Modal open={open} onClose={() => setOpen(false)} slots={{ backdrop: LightboxBackdrop }}>
         <Fade in={open}>
           <Box
             component="img"
@@ -476,7 +433,7 @@ const Image = (props) => {
 const UserActions = (props) => (
   <>
     {props.notification.actions.map((action) => (
-      <UserAction key={action.id} notification={props.notification} action={action} />
+      <UserAction key={action.id} notification={props.notification} action={action} onShowSnack={props.onShowSnack} />
     ))}
   </>
 );
@@ -498,6 +455,15 @@ const updateActionStatus = (notification, action, progress, error) => {
   });
 };
 
+const clearNotification = async (notification) => {
+  console.log(`[Notifications] Clearing notification ${notification.id}`);
+  const subscription = await subscriptionManager.get(notification.subscriptionId);
+  if (subscription) {
+    await notifier.cancel(subscription, notification);
+  }
+  await subscriptionManager.markNotificationRead(notification.id);
+};
+
 const performHttpAction = async (notification, action) => {
   console.log(`[Notifications] Performing HTTP user action`, action);
   try {
@@ -513,6 +479,9 @@ const performHttpAction = async (notification, action) => {
     const success = response.status >= 200 && response.status <= 299;
     if (success) {
       updateActionStatus(notification, action, ACTION_PROGRESS_SUCCESS, null);
+      if (action.clear) {
+        await clearNotification(notification);
+      }
     } else {
       updateActionStatus(notification, action, ACTION_PROGRESS_FAILED, `${action.label}: Unexpected response HTTP ${response.status}`);
     }
@@ -526,7 +495,7 @@ const UserAction = (props) => {
   const { t } = useTranslation();
   const { notification } = props;
   const { action } = props;
-  if (action.action === "broadcast") {
+  if (action.action === ACTION_BROADCAST) {
     return (
       <Tooltip title={t("notifications_actions_not_supported")}>
         <span>
@@ -537,11 +506,17 @@ const UserAction = (props) => {
       </Tooltip>
     );
   }
-  if (action.action === "view") {
+  if (action.action === ACTION_VIEW) {
+    const handleClick = () => {
+      openUrl(action.url);
+      if (action.clear) {
+        clearNotification(notification);
+      }
+    };
     return (
       <Tooltip title={t("notifications_actions_open_url_title", { url: action.url })}>
         <Button
-          onClick={() => openUrl(action.url)}
+          onClick={handleClick}
           aria-label={t("notifications_actions_open_url_title", {
             url: action.url,
           })}
@@ -551,7 +526,7 @@ const UserAction = (props) => {
       </Tooltip>
     );
   }
-  if (action.action === "http") {
+  if (action.action === ACTION_HTTP) {
     const method = action.method ?? "POST";
     const label = action.label + (ACTION_LABEL_SUFFIX[action.progress ?? 0] ?? "");
     return (
@@ -573,12 +548,28 @@ const UserAction = (props) => {
       </Tooltip>
     );
   }
+  if (action.action === ACTION_COPY) {
+    const handleClick = async () => {
+      await copyToClipboard(action.value);
+      props.onShowSnack();
+      if (action.clear) {
+        await clearNotification(notification);
+      }
+    };
+    return (
+      <Tooltip title={t("common_copy_to_clipboard")}>
+        <Button onClick={handleClick} aria-label={t("common_copy_to_clipboard")}>
+          {action.label}
+        </Button>
+      </Tooltip>
+    );
+  }
   return null; // Others
 };
 
 const NoNotifications = (props) => {
   const { t } = useTranslation();
-  const topicShortUrlResolved = topicShortUrl(props.subscription.baseUrl, props.subscription.topic);
+  const topicUrlResolved = topicUrl(props.subscription.baseUrl, props.subscription.topic);
   return (
     <VerticallyCenteredContainer maxWidth="xs">
       <Typography variant="h5" align="center" sx={{ paddingBottom: 1 }}>
@@ -591,7 +582,7 @@ const NoNotifications = (props) => {
         {t("notifications_example")}:<br />
         <tt>
           {'$ curl -d "Hi" '}
-          {topicShortUrlResolved}
+          {topicUrlResolved}
         </tt>
       </Paragraph>
       <Paragraph>
@@ -604,7 +595,7 @@ const NoNotifications = (props) => {
 const NoNotificationsWithoutSubscription = (props) => {
   const { t } = useTranslation();
   const subscription = props.subscriptions[0];
-  const topicShortUrlResolved = topicShortUrl(subscription.baseUrl, subscription.topic);
+  const topicUrlResolved = topicUrl(subscription.baseUrl, subscription.topic);
   return (
     <VerticallyCenteredContainer maxWidth="xs">
       <Typography variant="h5" align="center" sx={{ paddingBottom: 1 }}>
@@ -617,7 +608,7 @@ const NoNotificationsWithoutSubscription = (props) => {
         {t("notifications_example")}:<br />
         <tt>
           {'$ curl -d "Hi" '}
-          {topicShortUrlResolved}
+          {topicUrlResolved}
         </tt>
       </Paragraph>
       <Paragraph>
@@ -669,4 +660,15 @@ const Loading = () => {
       </Typography>
     </VerticallyCenteredContainer>
   );
+};
+
+// Render nothing until a load takes at least `delayMs`, so the centered spinner only shows on
+// genuinely slow loads -- normal sub-frame IndexedDB reads don't flash it on every remount.
+const DeferredLoading = ({ delayMs = 250 }) => {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setShow(true), delayMs);
+    return () => clearTimeout(timer);
+  }, [delayMs]);
+  return show ? <Loading /> : null;
 };

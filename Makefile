@@ -1,10 +1,13 @@
 MAKEFLAGS := --jobs=1
+NPM := npm
 PYTHON := python3
 PIP := pip3
 VERSION := $(shell git describe --tag)
 COMMIT := $(shell git rev-parse --short HEAD)
 
-.PHONY:
+# FORCE is an always-out-of-date target with no recipe; listing it as a prerequisite
+# forces that target's recipe to run every time (the classic "FORCE target" idiom).
+FORCE:
 
 help:
 	@echo "Typical commands (more see below):"
@@ -31,6 +34,7 @@ help:
 	@echo "Build server & client (without GoReleaser):"
 	@echo "  make cli-linux-server           - Build client & server (no GoReleaser, current arch, Linux)"
 	@echo "  make cli-darwin-server          - Build client & server (no GoReleaser, current arch, macOS)"
+	@echo "  make cli-windows-server         - Build client & server (no GoReleaser, amd64 only, Windows)"
 	@echo "  make cli-client                 - Build client only (no GoReleaser, current arch, Linux/macOS/Windows)"
 	@echo
 	@echo "Build dev Docker:"
@@ -41,6 +45,8 @@ help:
 	@echo "  make web-deps                   - Install web app dependencies (npm install the universe)"
 	@echo "  make web-build                  - Actually build the web app"
 	@echo "  make web-lint                   - Run eslint on the web app"
+	@echo "  make web-test                   - Run vitest unit tests for the web app"
+	@echo "  make web-e2e                    - Run Playwright e2e tests against a fresh local server"
 	@echo "  make web-fmt                    - Run prettier on the web app"
 	@echo "  make web-fmt-check              - Run prettier on the web app, but don't change anything"
 	@echo
@@ -50,7 +56,9 @@ help:
 	@echo "  make docs-build                 - Actually build the documentation"
 	@echo
 	@echo "Test/check:"
-	@echo "  make test                       - Run tests"
+	@echo "  make test                       - Run all tests (Go + web)"
+	@echo "  make cli-test                   - Run Go tests only"
+	@echo "  make web-test                   - Run web app tests only"
 	@echo "  make race                       - Run tests with -race flag"
 	@echo "  make coverage                   - Run tests and show coverage"
 	@echo "  make coverage-html              - Run tests and show coverage (as HTML)"
@@ -80,12 +88,12 @@ help:
 
 # Building everything
 
-clean: .PHONY
+clean: FORCE
 	rm -rf dist build server/docs server/site
 
 build: web docs cli
 
-update: web-deps-update cli-deps-update docs-deps-update
+update: web-deps-update cli-deps-update docs-deps-update go-check
 	docker pull alpine
 
 docker-dev:
@@ -106,6 +114,7 @@ build-deps-ubuntu:
 		curl \
 		gcc-aarch64-linux-gnu \
 		gcc-arm-linux-gnueabi \
+		gcc-mingw-w64-x86-64 \
 		python3 \
 		python3-venv \
 		jq
@@ -116,7 +125,7 @@ build-deps-ubuntu:
 
 docs: docs-deps docs-build
 
-docs-venv: .PHONY
+docs-venv: FORCE
 	$(PYTHON) -m venv ./venv
 
 docs-build: docs-venv
@@ -125,7 +134,7 @@ docs-build: docs-venv
 docs-deps: docs-venv
 	(. venv/bin/activate && $(PIP) install -r requirements.txt)
 
-docs-deps-update: .PHONY
+docs-deps-update: FORCE
 	(. venv/bin/activate && $(PIP) install -r requirements.txt --upgrade)
 
 
@@ -135,7 +144,7 @@ web: web-deps web-build
 
 web-build:
 	cd web \
-		&& npm run build \
+		&& $(NPM) run build \
 		&& mv build/index.html build/app.html \
 		&& rm -rf ../server/site \
 		&& mv build ../server/site \
@@ -143,20 +152,31 @@ web-build:
 			../server/site/config.js
 
 web-deps:
-	cd web && npm install
+	cd web && $(NPM) ci
+	# Use "npm ci" so that we don't change the package lock file
 	# If this fails for .svg files, optimize them with svgo
 
 web-deps-update:
-	cd web && npm update
+	cd web && $(NPM) update --before="$(shell date -d '7 days ago' +%Y-%m-%d)"
+	cd web && $(NPM) install
 
 web-fmt:
-	cd web && npm run format
+	cd web && $(NPM) run format
 
 web-fmt-check:
-	cd web && npm run format:check
+	cd web && $(NPM) run format:check
 
 web-lint:
-	cd web && npm run lint
+	cd web && $(NPM) run lint
+
+web-test:
+	cd web && $(NPM) run test
+
+# The e2e server must embed the real web app, so this builds the web app and a server binary
+# (build/ntfy-e2e) first; see web/e2e/server.mjs for how it is started
+web-e2e: web cli-deps-static-sites
+	CGO_ENABLED=1 go build -tags sqlite_omit_load_extension,osusergo,netgo -o build/ntfy-e2e .
+	cd web && npx playwright install chromium && $(NPM) run test:e2e
 
 # Main server/client build
 
@@ -201,6 +221,16 @@ cli-darwin-server: cli-deps-static-sites
 		-ldflags \
 		"-linkmode=external -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(shell date +%s)"
 
+cli-windows-server: cli-deps-static-sites
+	# This is a target to build the CLI (including the server) for Windows.
+	# Use this for Windows development, if you really don't want to install GoReleaser ...
+	mkdir -p dist/ntfy_windows_server server/docs
+	CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build \
+		-o dist/ntfy_windows_server/ntfy.exe \
+		-tags sqlite_omit_load_extension,osusergo,netgo \
+		-ldflags \
+		"-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(shell date +%s)"
+
 cli-client: cli-deps-static-sites
 	# This is a target to build the CLI (excluding the server) manually. This should work on Linux/macOS/Windows.
 	# Use this for development, if you really don't want to install GoReleaser ...
@@ -213,14 +243,14 @@ cli-client: cli-deps-static-sites
 
 cli-deps: cli-deps-static-sites cli-deps-all cli-deps-gcc
 
-cli-deps-gcc: cli-deps-gcc-armv6-armv7 cli-deps-gcc-arm64
+cli-deps-gcc: cli-deps-gcc-armv6-armv7 cli-deps-gcc-arm64 cli-deps-gcc-windows
 
 cli-deps-static-sites:
 	mkdir -p server/docs server/site
 	touch server/docs/index.html server/site/app.html
 
 cli-deps-all:
-	go install github.com/goreleaser/goreleaser@latest
+	go install github.com/goreleaser/goreleaser/v2@latest
 
 cli-deps-gcc-armv6-armv7:
 	which arm-linux-gnueabi-gcc || { echo "ERROR: ARMv6/ARMv7 cross compiler not installed. On Ubuntu, run: apt install gcc-arm-linux-gnueabi"; exit 1; }
@@ -228,11 +258,15 @@ cli-deps-gcc-armv6-armv7:
 cli-deps-gcc-arm64:
 	which aarch64-linux-gnu-gcc || { echo "ERROR: ARM64 cross compiler not installed. On Ubuntu, run: apt install gcc-aarch64-linux-gnu"; exit 1; }
 
+cli-deps-gcc-windows:
+	which x86_64-w64-mingw32-gcc || { echo "ERROR: Windows cross compiler not installed. On Ubuntu, run: apt install gcc-mingw-w64-x86-64"; exit 1; }
+
 cli-deps-update:
 	go get -u
+	go mod tidy
 	go install honnef.co/go/tools/cmd/staticcheck@latest
 	go install golang.org/x/lint/golint@latest
-	go install github.com/goreleaser/goreleaser@latest
+	go install github.com/goreleaser/goreleaser/v2@latest
 
 cli-build-results:
 	cat dist/config.yaml
@@ -246,25 +280,31 @@ cli-build-results:
 
 # Test/check targets
 
-check: test web-fmt-check fmt-check vet web-lint lint staticcheck
+check: test web-fmt-check fmt-check vet web-lint lint staticcheck template-check go-check
 
-test: .PHONY
-	go test $(shell go list ./... | grep -vE 'ntfy/(test|examples|tools)')
+checkv: testv web-fmt-check fmt-check vet web-lint lint staticcheck template-check go-check
 
-testv: .PHONY
-	go test -v $(shell go list ./... | grep -vE 'ntfy/(test|examples|tools)')
+test: cli-test web-test
 
-race: .PHONY
-	go test -v -race $(shell go list ./... | grep -vE 'ntfy/(test|examples|tools)')
+testv: cli-testv web-test
+
+cli-test: FORCE
+	go test $(shell go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -vE 'ntfy/v2/(test|examples|tools)')
+
+cli-testv: FORCE
+	go test -v $(shell go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -vE 'ntfy/v2/(test|examples|tools)')
+
+race: FORCE
+	go test -v -race $(shell go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -vE 'ntfy/v2/(test|examples|tools)')
 
 coverage:
 	mkdir -p build/coverage
-	go test -v -race -coverprofile=build/coverage/coverage.txt -covermode=atomic $(shell go list ./... | grep -vE 'ntfy/(test|examples|tools)')
+	go test -v -race -coverprofile=build/coverage/coverage.txt -covermode=atomic $(shell go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -vE 'ntfy/v2/(test|examples|tools|web)')
 	go tool cover -func build/coverage/coverage.txt
 
 coverage-html:
 	mkdir -p build/coverage
-	go test -race -coverprofile=build/coverage/coverage.txt -covermode=atomic $(shell go list ./... | grep -vE 'ntfy/(test|examples|tools)')
+	go test -race -coverprofile=build/coverage/coverage.txt -covermode=atomic $(shell go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -vE 'ntfy/v2/(test|examples|tools)')
 	go tool cover -html build/coverage/coverage.txt
 
 coverage-upload:
@@ -284,15 +324,71 @@ vet:
 
 lint:
 	which golint || go install golang.org/x/lint/golint@latest
-	go list ./... | grep -v /vendor/ | xargs -L1 golint -set_exit_status
+	go list ./... | grep -v /vendor/ | grep -vE 'ntfy/v2/template/gotext' | xargs -L1 golint -set_exit_status
 
-staticcheck: .PHONY
+staticcheck: FORCE
 	rm -rf build/staticcheck
 	which staticcheck || go install honnef.co/go/tools/cmd/staticcheck@latest
 	mkdir -p build/staticcheck
 	ln -s "go" build/staticcheck/go
-	PATH="$(PWD)/build/staticcheck:$(PATH)" staticcheck ./...
+	PATH="$(PWD)/build/staticcheck:$(PATH)" staticcheck $$(go list ./... | grep -vE 'ntfy/v2/template/gotext')
 	rm -rf build/staticcheck
+
+
+# Vendored template targets (see template/README.md)
+
+TEMPLATE_GO_VERSION := go$(shell cat .go-version 2>/dev/null)
+
+update-template:
+	@if [ "$$(go env GOVERSION)" != "$(TEMPLATE_GO_VERSION)" ]; then \
+		echo "ERROR: local Go $$(go env GOVERSION) != $(TEMPLATE_GO_VERSION) pinned in .go-version."; \
+		echo "Bump .go-version and install that toolchain first: go install golang.org/dl/$(TEMPLATE_GO_VERSION)@latest && $(TEMPLATE_GO_VERSION) download"; \
+		exit 1; \
+	fi
+	src="$$(go env GOROOT)/src"; \
+	rm -f template/gotext/*.go template/gotext/fmtsort/*.go; \
+	for f in $$(go list -f '{{range .GoFiles}}{{.}} {{end}}' text/template); do cp "$$src/text/template/$$f" template/gotext/; done; \
+	for f in $$(go list -f '{{range .GoFiles}}{{.}} {{end}}' internal/fmtsort); do cp "$$src/internal/fmtsort/$$f" template/gotext/fmtsort/; done; \
+	sed -i 's/^package template$$/package gotext/' template/gotext/*.go; \
+	sed -i 's#"internal/fmtsort"#"heckel.io/ntfy/v2/template/gotext/fmtsort"#' template/gotext/*.go; \
+	( cd template/gotext && for p in patches/*.patch; do echo "Applying $$p"; git apply "$$p" || exit 1; done )
+	go env GOVERSION > template/gotext/GENERATED_FROM
+	@echo "Regenerated template/gotext/ from $(TEMPLATE_GO_VERSION) (files enumerated via 'go list'); review with 'git diff'."
+
+template-check: FORCE
+	@if [ "$$(cat template/gotext/GENERATED_FROM)" != "$(TEMPLATE_GO_VERSION)" ]; then \
+		echo "ERROR: template/gotext was generated from $$(cat template/gotext/GENERATED_FROM), but .go-version pins $(TEMPLATE_GO_VERSION). Run 'make update-template' on the pinned Go."; \
+		exit 1; \
+	fi
+	@if [ "$$(go env GOVERSION)" != "$(TEMPLATE_GO_VERSION)" ]; then \
+		echo "SKIP: local Go $$(go env GOVERSION) != pinned $(TEMPLATE_GO_VERSION); skipping vendored template content check (version marker already verified)."; \
+		exit 0; \
+	fi
+	@tmp=$$(mktemp -d); src="$$(go env GOROOT)/src"; \
+	mkdir -p "$$tmp/gotext/fmtsort"; \
+	for f in $$(go list -f '{{range .GoFiles}}{{.}} {{end}}' text/template); do cp "$$src/text/template/$$f" "$$tmp/gotext/"; done; \
+	for f in $$(go list -f '{{range .GoFiles}}{{.}} {{end}}' internal/fmtsort); do cp "$$src/internal/fmtsort/$$f" "$$tmp/gotext/fmtsort/"; done; \
+	sed -i 's/^package template$$/package gotext/' "$$tmp/gotext/"*.go; \
+	sed -i 's#"internal/fmtsort"#"heckel.io/ntfy/v2/template/gotext/fmtsort"#' "$$tmp/gotext/"*.go; \
+	cp template/gotext/patches/*.patch "$$tmp/"; \
+	( cd "$$tmp/gotext" && for p in "$$tmp"/*.patch; do git apply "$$p" || exit 1; done ); \
+	if diff -rq -x 'README.md' -x 'GENERATED_FROM' -x 'patches' "$$tmp/gotext" template/gotext >/dev/null 2>&1; then \
+		rm -rf "$$tmp"; \
+	else \
+		echo "ERROR: template/gotext/ drifted from GOROOT+patches (or its file set changed). Run 'make update-template' on Go $(TEMPLATE_GO_VERSION):"; \
+		diff -rq -x 'README.md' -x 'GENERATED_FROM' -x 'patches' "$$tmp/gotext" template/gotext; \
+		rm -rf "$$tmp"; exit 1; \
+	fi
+
+# go-check is advisory only (never fails): it warns when the pinned Go (.go-version) is behind the
+# latest upstream release, so template/gotext doesn't silently fall behind on text/template fixes.
+go-check: FORCE
+	@latest=$$(curl -s --max-time 10 'https://go.dev/VERSION?m=text' 2>/dev/null | head -1); \
+	if [ -n "$$latest" ] && [ "$$latest" != "$(TEMPLATE_GO_VERSION)" ]; then \
+		echo ""; \
+		echo "note: latest Go is $$latest, but template/gotext is pinned to $(TEMPLATE_GO_VERSION) (.go-version)."; \
+		echo "      to bump: install $$latest, set .go-version to $${latest#go}, then run 'make update-template'."; \
+	fi
 
 
 # Releasing targets
@@ -301,10 +397,14 @@ release: clean cli-deps release-checks docs web check
 	goreleaser release --clean
 
 release-snapshot: clean cli-deps docs web check
-	goreleaser release --snapshot --skip-publish --clean
+	goreleaser release --snapshot --clean
 
 release-checks:
 	$(eval LATEST_TAG := $(shell git describe --abbrev=0 --tags | cut -c2-))
+	if [ "$$(go env GOVERSION)" != "go$$(cat .go-version)" ]; then\
+		echo "ERROR: releases must use the pinned Go toolchain (go$$(cat .go-version) from .go-version), but this is $$(go env GOVERSION). This also ensures 'make check' enforces (not skips) the template/gotext drift check.";\
+		exit 1;\
+	fi
 	if ! grep -q $(LATEST_TAG) docs/install.md; then\
 	 	echo "ERROR: Must update docs/install.md with latest tag first.";\
 	 	exit 1;\

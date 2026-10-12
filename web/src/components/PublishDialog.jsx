@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useContext, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useContext, useEffect, useRef, useState } from "react";
 import {
   Checkbox,
   Chip,
@@ -22,7 +22,7 @@ import {
   useTheme,
 } from "@mui/material";
 import InsertEmoticonIcon from "@mui/icons-material/InsertEmoticon";
-import { Close } from "@mui/icons-material";
+import Close from "@mui/icons-material/Close";
 import { Trans, useTranslation } from "react-i18next";
 import priority1 from "../img/priority-1.svg";
 import priority2 from "../img/priority-2.svg";
@@ -30,16 +30,20 @@ import priority3 from "../img/priority-3.svg";
 import priority4 from "../img/priority-4.svg";
 import priority5 from "../img/priority-5.svg";
 import { formatBytes, maybeWithAuth, topicShortUrl, topicUrl, validTopic, validUrl } from "../app/utils";
+import { imageRegex } from "../app/notificationUtils";
 import AttachmentIcon from "./AttachmentIcon";
 import DialogFooter from "./DialogFooter";
 import api from "../app/Api";
 import userManager from "../app/UserManager";
-import EmojiPicker from "./EmojiPicker";
 import session from "../app/Session";
 import routes from "./routes";
 import accountApi from "../app/AccountApi";
 import { UnauthorizedError } from "../app/errors";
-import { AccountContext } from "./App";
+import AccountContext from "./AccountContext";
+
+// Loaded lazily so the full emoji dataset (~300 KB) is only fetched when the publish
+// dialog is opened, not in the initial app bundle (see EmojiPicker.jsx).
+const EmojiPicker = lazy(() => import("./EmojiPicker"));
 
 const PublishDialog = (props) => {
   const theme = useTheme();
@@ -145,6 +149,10 @@ const PublishDialog = (props) => {
     }
     if (delay.trim()) {
       url.searchParams.append("delay", delay.trim());
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (timezone) {
+        url.searchParams.append("timezone", timezone);
+      }
     }
     if (attachFile && message.trim()) {
       url.searchParams.append("message", message.replaceAll("\n", "\\n").trim());
@@ -164,7 +172,7 @@ const PublishDialog = (props) => {
               loaded: formatBytes(ev.loaded),
               total: formatBytes(ev.total),
               percent: Math.round((ev.loaded * 100.0) / ev.total),
-            })
+            }),
           );
         } else {
           setStatus(t("publish_dialog_progress_uploading"));
@@ -197,19 +205,19 @@ const PublishDialog = (props) => {
           t("publish_dialog_attachment_limits_file_and_quota_reached", {
             fileSizeLimit: formatBytes(fileSizeLimit),
             remainingBytes: formatBytes(remainingBytes),
-          })
+          }),
         );
       } else if (fileSizeLimitReached) {
         setAttachFileError(
           t("publish_dialog_attachment_limits_file_reached", {
             fileSizeLimit: formatBytes(fileSizeLimit),
-          })
+          }),
         );
       } else if (quotaReached) {
         setAttachFileError(
           t("publish_dialog_attachment_limits_quota_reached", {
             remainingBytes: formatBytes(remainingBytes),
-          })
+          }),
         );
       } else {
         setAttachFileError("");
@@ -288,7 +296,7 @@ const PublishDialog = (props) => {
   return (
     <>
       {dropZone && <DropArea onDrop={handleAttachFileDrop} onDragLeave={handleAttachFileDragLeave} />}
-      <Dialog maxWidth="md" open={open} onClose={props.onCancel} fullScreen={fullScreen}>
+      <Dialog maxWidth="md" open={open} onClose={props.onClose} fullScreen={fullScreen}>
         <DialogTitle>
           {baseUrl && topic
             ? t("publish_dialog_title_topic", {
@@ -319,8 +327,10 @@ const PublishDialog = (props) => {
                 type="url"
                 variant="standard"
                 sx={{ flexGrow: 1, marginRight: 1 }}
-                inputProps={{
-                  "aria-label": t("publish_dialog_base_url_label"),
+                slotProps={{
+                  htmlInput: {
+                    "aria-label": t("publish_dialog_base_url_label"),
+                  },
                 }}
               />
               <TextField
@@ -334,8 +344,10 @@ const PublishDialog = (props) => {
                 variant="standard"
                 autoFocus={!messageFocused}
                 sx={{ flexGrow: 1 }}
-                inputProps={{
-                  "aria-label": t("publish_dialog_topic_label"),
+                slotProps={{
+                  htmlInput: {
+                    "aria-label": t("publish_dialog_topic_label"),
+                  },
                 }}
               />
             </ClosableRow>
@@ -350,8 +362,10 @@ const PublishDialog = (props) => {
             type="text"
             fullWidth
             variant="standard"
-            inputProps={{
-              "aria-label": t("publish_dialog_title_label"),
+            slotProps={{
+              htmlInput: {
+                "aria-label": t("publish_dialog_title_label"),
+              },
             }}
           />
           <TextField
@@ -367,8 +381,10 @@ const PublishDialog = (props) => {
             autoFocus={messageFocused}
             fullWidth
             multiline
-            inputProps={{
-              "aria-label": t("publish_dialog_message_label"),
+            slotProps={{
+              htmlInput: {
+                "aria-label": t("publish_dialog_message_label"),
+              },
             }}
             onPaste={handlePaste}
           />
@@ -380,14 +396,18 @@ const PublishDialog = (props) => {
                 size="small"
                 checked={markdownEnabled}
                 onChange={(ev) => setMarkdownEnabled(ev.target.checked)}
-                inputProps={{
-                  "aria-label": t("publish_dialog_checkbox_markdown"),
+                slotProps={{
+                  input: {
+                    "aria-label": t("publish_dialog_checkbox_markdown"),
+                  },
                 }}
               />
             }
           />
           <div style={{ display: "flex" }}>
-            <EmojiPicker anchorEl={emojiPickerAnchorEl} onEmojiPick={handleEmojiPick} onClose={handleEmojiClose} />
+            <Suspense fallback={null}>
+              <EmojiPicker anchorEl={emojiPickerAnchorEl} onEmojiPick={handleEmojiPick} onClose={handleEmojiClose} />
+            </Suspense>
             <DialogIconButton disabled={disabled} onClick={handleEmojiClick} aria-label={t("publish_dialog_emoji_picker_show")}>
               <InsertEmoticonIcon />
             </DialogIconButton>
@@ -401,8 +421,10 @@ const PublishDialog = (props) => {
               type="text"
               variant="standard"
               sx={{ flexGrow: 1, marginRight: 1 }}
-              inputProps={{
-                "aria-label": t("publish_dialog_tags_label"),
+              slotProps={{
+                htmlInput: {
+                  "aria-label": t("publish_dialog_tags_label"),
+                },
               }}
             />
             <FormControl variant="standard" margin="dense" sx={{ minWidth: 170, maxWidth: 300, flexGrow: 1 }}>
@@ -459,8 +481,10 @@ const PublishDialog = (props) => {
                 type="url"
                 fullWidth
                 variant="standard"
-                inputProps={{
-                  "aria-label": t("publish_dialog_click_label"),
+                slotProps={{
+                  htmlInput: {
+                    "aria-label": t("publish_dialog_click_label"),
+                  },
                 }}
               />
             </ClosableRow>
@@ -484,8 +508,10 @@ const PublishDialog = (props) => {
                 type="email"
                 variant="standard"
                 fullWidth
-                inputProps={{
-                  "aria-label": t("publish_dialog_email_label"),
+                slotProps={{
+                  htmlInput: {
+                    "aria-label": t("publish_dialog_email_label"),
+                  },
                 }}
               />
             </ClosableRow>
@@ -555,8 +581,10 @@ const PublishDialog = (props) => {
                 type="url"
                 variant="standard"
                 sx={{ flexGrow: 5, marginRight: 1 }}
-                inputProps={{
-                  "aria-label": t("publish_dialog_attach_label"),
+                slotProps={{
+                  htmlInput: {
+                    "aria-label": t("publish_dialog_attach_label"),
+                  },
                 }}
               />
               <TextField
@@ -572,8 +600,10 @@ const PublishDialog = (props) => {
                 type="text"
                 variant="standard"
                 sx={{ flexGrow: 1 }}
-                inputProps={{
-                  "aria-label": t("publish_dialog_filename_label"),
+                slotProps={{
+                  htmlInput: {
+                    "aria-label": t("publish_dialog_filename_label"),
+                  },
                 }}
               />
             </ClosableRow>
@@ -616,8 +646,10 @@ const PublishDialog = (props) => {
                 type="text"
                 variant="standard"
                 fullWidth
-                inputProps={{
-                  "aria-label": t("publish_dialog_delay_label"),
+                slotProps={{
+                  htmlInput: {
+                    "aria-label": t("publish_dialog_delay_label"),
+                  },
                 }}
               />
             </ClosableRow>
@@ -734,8 +766,10 @@ const PublishDialog = (props) => {
                     size="small"
                     checked={publishAnother}
                     onChange={(ev) => setPublishAnother(ev.target.checked)}
-                    inputProps={{
-                      "aria-label": t("publish_dialog_checkbox_publish_another"),
+                    slotProps={{
+                      input: {
+                        "aria-label": t("publish_dialog_checkbox_publish_another"),
+                      },
                     }}
                   />
                 }
@@ -805,7 +839,7 @@ const AttachmentBox = (props) => {
           borderRadius: "4px",
         }}
       >
-        <AttachmentIcon type={file.type} href={URL.createObjectURL(file)} />
+        <AttachmentIcon type={file.type} href={imageRegex.test(file.name) ? URL.createObjectURL(file) : undefined} />
         <Box sx={{ marginLeft: 1, textAlign: "left" }}>
           <ExpandingTextField
             minWidth={140}
@@ -866,12 +900,14 @@ const ExpandingTextField = (props) => {
         type="text"
         variant="standard"
         sx={{ width: `${textWidth}px`, borderBottom: "none" }}
-        InputProps={{
-          style: { fontSize: theme.typography[props.variant].fontSize },
-        }}
-        inputProps={{
-          style: { paddingBottom: 0, paddingTop: 0 },
-          "aria-label": props.placeholder,
+        slotProps={{
+          input: {
+            style: { fontSize: theme.typography[props.variant].fontSize },
+          },
+          htmlInput: {
+            style: { paddingBottom: 0, paddingTop: 0 },
+            "aria-label": props.placeholder,
+          },
         }}
         disabled={props.disabled}
       />

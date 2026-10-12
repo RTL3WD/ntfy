@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 
+	"heckel.io/ntfy/v2/user"
 	"heckel.io/ntfy/v2/util"
 )
 
@@ -12,11 +13,12 @@ const (
 	contextRateVisitor contextKey = iota + 2586
 	contextTopic
 	contextMatrixPushKey
+	contextVisitorIP // Client IP extracted in maybeAuthenticate; reused by the abuse ban-feed (see ban.Service.Record)
 )
 
 func (s *Server) limitRequests(next handleFunc) handleFunc {
 	return func(w http.ResponseWriter, r *http.Request, v *visitor) error {
-		if util.ContainsIP(s.config.VisitorRequestExemptIPAddrs, v.ip) {
+		if util.ContainsIP(s.config.VisitorRequestExemptPrefixes, v.ip) {
 			return next(w, r, v)
 		} else if !v.RequestAllowed() {
 			return errHTTPTooManyRequestsLimitRequests
@@ -28,7 +30,7 @@ func (s *Server) limitRequests(next handleFunc) handleFunc {
 // limitRequestsWithTopic limits requests with a topic and stores the rate-limiting-subscriber and topic into request.Context
 func (s *Server) limitRequestsWithTopic(next handleFunc) handleFunc {
 	return func(w http.ResponseWriter, r *http.Request, v *visitor) error {
-		t, err := s.topicFromPath(r.URL.Path)
+		t, err := s.topicFromPath(v, r.URL.Path)
 		if err != nil {
 			return err
 		}
@@ -40,7 +42,7 @@ func (s *Server) limitRequestsWithTopic(next handleFunc) handleFunc {
 			contextRateVisitor: vrate,
 			contextTopic:       t,
 		})
-		if util.ContainsIP(s.config.VisitorRequestExemptIPAddrs, v.ip) {
+		if util.ContainsIP(s.config.VisitorRequestExemptPrefixes, v.ip) {
 			return next(w, r, v)
 		} else if !vrate.RequestAllowed() {
 			return errHTTPTooManyRequestsLimitRequests
@@ -103,6 +105,15 @@ func (s *Server) ensureCallsEnabled(next handleFunc) handleFunc {
 	}
 }
 
+func (s *Server) ensureEmailsEnabled(next handleFunc) handleFunc {
+	return func(w http.ResponseWriter, r *http.Request, v *visitor) error {
+		if s.mailer == nil || s.userManager == nil {
+			return errHTTPNotFound
+		}
+		return next(w, r, v)
+	}
+}
+
 func (s *Server) ensurePaymentsEnabled(next handleFunc) handleFunc {
 	return func(w http.ResponseWriter, r *http.Request, v *visitor) error {
 		if s.config.StripeSecretKey == "" || s.stripe == nil {
@@ -128,5 +139,33 @@ func (s *Server) withAccountSync(next handleFunc) handleFunc {
 			s.publishSyncEventAsync(v)
 		}
 		return err
+	}
+}
+
+func (s *Server) authorizeTopicWrite(next handleFunc) handleFunc {
+	return s.authorizeTopic(next, user.PermissionWrite)
+}
+
+func (s *Server) authorizeTopicRead(next handleFunc) handleFunc {
+	return s.authorizeTopic(next, user.PermissionRead)
+}
+
+func (s *Server) authorizeTopic(next handleFunc, perm user.Permission) handleFunc {
+	return func(w http.ResponseWriter, r *http.Request, v *visitor) error {
+		if s.userManager == nil {
+			return next(w, r, v)
+		}
+		topics, _, err := s.topicsFromPath(v, r.URL.Path)
+		if err != nil {
+			return err
+		}
+		u := v.User()
+		for _, t := range topics {
+			if err := s.userManager.Authorize(u, t.ID, perm); err != nil {
+				logvr(v, r).With(t).Err(err).Debug("Access to topic %s not authorized", t.ID)
+				return errHTTPForbidden.With(t)
+			}
+		}
+		return next(w, r, v)
 	}
 }
